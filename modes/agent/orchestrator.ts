@@ -7,6 +7,7 @@ import { createAgentTools } from "./agent-tools";
 import {stepCountIs, ToolLoopAgent} from 'ai'
 import { getAgentModel } from "../../ai";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
+import { runApprovalFlow } from "./approval";
 
 export async function runAgentMode() {
     console.log(chalk.bold('\n 🤖 Agent mode \n'))
@@ -19,8 +20,8 @@ export async function runAgentMode() {
     if(isCancel(goal) || !goal.trim()) return
 
     const config = defaultAgentConfig()
-    const traacker = new ActionTracker()
-    const executor = new ToolExecutor(traacker, config)
+    const tracker = new ActionTracker()
+    const executor = new ToolExecutor(tracker, config)
     const tools = createAgentTools(executor)
 
     const agent = new ToolLoopAgent({
