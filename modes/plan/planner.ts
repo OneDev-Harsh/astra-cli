@@ -1,16 +1,36 @@
+import {
+  Output,
+  extractJsonMiddleware,
+  generateText,
+  stepCountIs,
+  tool,
+  wrapLanguageModel,
+} from "ai";
 import z from "zod";
 import chalk from "chalk";
-import { confirm, isCancel, text } from "@clack/prompts";
-import { ToolLoopAgent, stepCountIs, tool } from "ai";
-import { getAgentModel } from "../../ai/ai.config";
+import { getAgentModel } from "../../ai";
 import { ActionTracker } from "../agent/action-tracker";
 import { ToolExecutor } from "../agent/tool-executor";
 import { defaultAgentConfig } from "../agent/types";
-import { runApprovalFlow } from "../agent/approval";
-import { renderTerminalMarkdown } from "../../tui/terminal-md";
-import { createWebTools } from "../plan/web-tools";
+import type { Plan, PlanStep } from "./types";
+import { createWebTools } from "./web-tools";
 
-function createAskTools(executor: ToolExecutor) {
+const planSchema = z.object({
+  researchSummary: z.string().optional(),
+  steps: z
+    .array(
+      z.object({
+        title: z.string(),
+        description: z.string(),
+        hints: z.array(z.string()).optional(),
+        complexity: z.enum(["low", "medium", "high"]).optional(),
+      }),
+    )
+    .min(1)
+    .max(20),
+});
+
+function readOnlyTools(executor: ToolExecutor) {
   return {
     read_file: tool({
       description:
@@ -72,67 +92,48 @@ function createAskTools(executor: ToolExecutor) {
   };
 }
 
-function asMd(questions: string, answer: string): string {
-    return `## Question\n\n${questions.trim()}\n\n## Answer\n\n${answer.trim()}\n`
-}
+const PLAN_INSTRUCTIONS = (codebase: string, hasWeb: boolean): string => [
+    'You are a Plan-Mode planner. You DO NOT modify files.',
+    `Workspace: ${codebase}`,
+    'Use read-only tools for codebase/skills research.',
+    hasWeb ? 'Web tools are available (web_search/web_crawl/fetch_url). Use only when needed.' : 'Web tools are unavailable.',
+    'Output must match the provided JSON schema.',
+    'Keep it short: 1-20 steps.'
+].join('\n')
 
-export async function runAskMode() {
-    console.log(chalk.bold("\n❔ Ask Mode\n"))
-
-    const questions = await text({
-        message: "What do you want to ask?"
-    })
-    if(isCancel(questions) || !questions.trim()) return
-
+export async function generatePlan(goal: string) {
     const config = defaultAgentConfig()
-    config.tools.allowShellExecution=false
-    config.tools.allowFileModification=false
-    config.tools.allowFolderCreation=false
-    config.tools.allowFileCreation=true
-
     const tracker = new ActionTracker()
     const executor = new ToolExecutor(tracker, config)
 
-    const tools = {
-        ...createAskTools(executor),
-        ...createWebTools(tracker)
-    }
-
-    const agent = new ToolLoopAgent({
+    const hasWeb = !!process.env.FIRECRAWL_API_KEY
+    const model = wrapLanguageModel({
         model: getAgentModel(),
-        stopWhen: stepCountIs(25),
-        tools
+        middleware: extractJsonMiddleware()
     })
 
-    const result = await agent.generate({prompt: questions.trim()})
-    const answer = result.text?.trim() || "(agent returned empty response)"
+    const tools = {...readOnlyTools(executor), ...(hasWeb?createWebTools(tracker):{})}
 
-    console.log("\n"+renderTerminalMarkdown(answer)+"\n")
+    console.log(chalk.cyan("\n🔎 Researching & drafting a plan...\n"))
 
-    const wantsSave = await confirm({
-        message:"Do you want to save this response to a .md file in the current directory?",
-        initialValue: false
+    const result = await generateText({
+        model,
+        tools,
+        stopWhen: stepCountIs(30),
+        system: PLAN_INSTRUCTIONS(config.codebasePath, false),
+        prompt: `User goal: \n${goal}`,
+        output:Output.object({schema: planSchema})
     })
 
-    if(isCancel(wantsSave) || !wantsSave) return
+    const validated = planSchema.parse(result.output)
 
-    const filename = await text({
-        message: "Filename",
-        initialValue: "response.md",
-        validate: (v) => {
-            const s = (v ?? '').trim()
-            if(!s) return 'Required'
-            if(s.includes('..') || s.includes('/') || s.includes('\\')) return "Do not specify path in filename"
-            if(!s.toLocaleLowerCase().endsWith('.md')) return 'Must end with .md'
-        }
-    })
+    const steps:PlanStep[] = validated.steps.map((s,i) => ({
+        id: `step-${i+1}`,
+        title: s.title,
+        description: s.description,
+        hints: s.hints,
+        complexity: s.complexity,
+    }))
 
-    if(isCancel(filename)) return
-
-    executor.createFile(filename, asMd(questions, answer))
-    const ok = await runApprovalFlow(tracker)
-    if(!ok) return executor.clearStaging()
-
-    executor.applyApprovedFromTracker()
-    executor.clearStaging()
+    return {goal, researchSummary: validated.researchSummary, steps}
 }
