@@ -2,6 +2,7 @@ import {tool} from 'ai'
 import {z} from 'zod'
 import Firecrawl from '@mendable/firecrawl-js'
 import type { ActionTracker } from '../agent/action-tracker'
+import { withSpinner } from '../../tui/spinner'
 
 let client:Firecrawl | null = null
 
@@ -26,7 +27,19 @@ export function createWebTools(tracker: ActionTracker) {
                 limit: z.number().int().min(1).max(10).optional().default(5)
             }),
             execute:async({query, limit}) => {
-                const res = await getClient().search(query, {limit, sources:["web"]})
+                const short = query.length > 50 ? query.slice(0, 50) + "…" : query;
+                const res = await withSpinner(
+                    {
+                        message: `Searching the web for "${short}"…`,
+                        doneMessage: "results received",
+                        failMessage: "search failed",
+                    },
+                    () =>
+                        getClient().search(query, {
+                            limit,
+                            sources: ["web"],
+                        }),
+                );
 
                 const items = (res.web ?? []).slice(0, limit)
 
@@ -52,7 +65,15 @@ export function createWebTools(tracker: ActionTracker) {
             description: 'Scrape a URL into markdown text.',
             inputSchema: z.object({ url: z.string().url() }),
             execute: async ({ url }) => {
-                const doc = await getClient().scrape(url, { formats: ['markdown'] });
+                const short = url.length > 60 ? url.slice(0, 60) + "…" : url;
+                const doc = await withSpinner(
+                    {
+                        message: `Crawling ${short}…`,
+                        doneMessage: "page scraped",
+                        failMessage: "crawl failed",
+                    },
+                    () => getClient().scrape(url, { formats: ['markdown'] }),
+                );
                 const md = (doc as { markdown?: string }).markdown ?? '';
                 tracker.log({
                 type: 'code_analysis',
@@ -68,7 +89,15 @@ export function createWebTools(tracker: ActionTracker) {
             description: 'HTTP GET for a URL. Returns response body.',
             inputSchema: z.object({ url: z.string().url() }),
             execute: async ({ url }) => {
-                const r = await fetch(url, { redirect: 'follow' });
+                const short = url.length > 60 ? url.slice(0, 60) + "…" : url;
+                const r = await withSpinner(
+                    {
+                        message: `Fetching ${short}…`,
+                        doneMessage: "response received",
+                        failMessage: "fetch failed",
+                    },
+                    () => fetch(url, { redirect: 'follow' }),
+                );
                 const body = await r.text();
                 const out = clip(body, 16_000);
                 tracker.log({

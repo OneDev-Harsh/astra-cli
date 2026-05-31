@@ -7,13 +7,13 @@ import {
   wrapLanguageModel,
 } from "ai";
 import z from "zod";
-import chalk from "chalk";
 import { getAgentModel } from "../../ai";
 import { ActionTracker } from "../agent/action-tracker";
 import { ToolExecutor } from "../agent/tool-executor";
 import { defaultAgentConfig } from "../agent/types";
 import type { Plan, PlanStep } from "./types";
 import { createWebTools } from "./web-tools";
+import { withSpinner } from "../../tui/spinner";
 
 const planSchema = z.object({
   researchSummary: z.string().optional(),
@@ -114,16 +114,22 @@ export async function generatePlan(goal: string) {
 
     const tools = {...readOnlyTools(executor), ...(hasWeb?createWebTools(tracker):{})}
 
-    console.log(chalk.cyan("\n🔎 Researching & drafting a plan...\n"))
-
-    const result = await generateText({
-        model,
-        tools,
-        stopWhen: stepCountIs(30),
-        system: PLAN_INSTRUCTIONS(config.codebasePath, false),
-        prompt: `User goal: \n${goal}`,
-        output:Output.object({schema: planSchema})
-    })
+    const result = await withSpinner(
+        {
+            message: "Researching & drafting plan…",
+            doneMessage: "plan ready",
+            failMessage: "planning failed",
+        },
+        () =>
+            generateText({
+                model,
+                tools,
+                stopWhen: stepCountIs(30),
+                system: PLAN_INSTRUCTIONS(config.codebasePath, false),
+                prompt: `User goal: \n${goal}`,
+                output: Output.object({ schema: planSchema }),
+            }),
+    );
 
     const validated = planSchema.parse(result.output)
 

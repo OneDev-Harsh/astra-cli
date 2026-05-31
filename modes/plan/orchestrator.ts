@@ -12,6 +12,7 @@ import type { PlanStep } from "./types";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { runApprovalFlow } from "../agent/approval";
 import { createWebTools } from "./web-tools";
+import { withSpinner } from "../../tui/spinner";
 
 function stepPrompt(goal: string, step: PlanStep): string {
   return [`Goal: ${goal}`, `Step: ${step.title}`, step.description].join('\n');
@@ -37,6 +38,8 @@ export async function runPlanMode():Promise<void>{
         initialValue: true,
     })
 
+    if (isCancel(proceed) || !proceed) return
+
     const config = defaultAgentConfig()
     const tracker = new ActionTracker()
     const executor = new ToolExecutor(tracker, config)
@@ -55,9 +58,29 @@ export async function runPlanMode():Promise<void>{
             tools,
         })
 
-        const r = await agent.generate({
-            prompt: stepPrompt(plan.goal, step)
-        })
+        const r = await withSpinner(
+            {
+                message: `Executing: ${step.title}`,
+                doneMessage: "done",
+                failMessage: "failed",
+            },
+            () =>
+                agent.generate({
+                    prompt: stepPrompt(plan.goal, step),
+                    onStepFinish: ({ toolCalls }) => {
+                        for (const tc of toolCalls) {
+                            const preview = JSON.stringify(tc.input).slice(0, 160);
+                            console.log(
+                                chalk.green("  ✔"),
+                                chalk.bold(String(tc.toolName)),
+                                chalk.dim(
+                                    preview + (preview.length > 160 ? "..." : ""),
+                                ),
+                            );
+                        }
+                    },
+                }),
+        );
 
         if(r.text) console.log(renderTerminalMarkdown(r.text))
     }
@@ -66,12 +89,22 @@ export async function runPlanMode():Promise<void>{
 
     if(!ok) return executor.clearStaging()
 
-    const { errors } = executor.applyApprovedFromTracker();
-    if (errors.length) {
-        console.log(chalk.red('\nSome operations reported errors:\n'));
-        for (const e of errors) console.log(chalk.red(`  • ${e}`));
-    } else {
-        console.log(chalk.green('\n✓ Applied.\n'));
-    }
+    await withSpinner(
+        {
+            message: "Applying approved changes…",
+            doneMessage: "all changes applied",
+            failMessage: "some operations failed",
+        },
+        async () => {
+            const { errors } = executor.applyApprovedFromTracker();
+            if (errors.length) {
+                console.log(chalk.red("\nSome operations reported errors:\n"));
+                for (const e of errors) console.log(chalk.red(`  • ${e}`));
+            } else {
+                console.log(chalk.green("\n✓ Applied.\n"));
+            }
+        },
+    );
+
     executor.clearStaging();
 }

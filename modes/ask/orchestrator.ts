@@ -9,6 +9,7 @@ import { defaultAgentConfig } from "../agent/types";
 import { runApprovalFlow } from "../agent/approval";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { createWebTools } from "../plan/web-tools";
+import { withSpinner } from "../../tui/spinner";
 
 function createAskTools(executor: ToolExecutor) {
   return {
@@ -104,7 +105,14 @@ export async function runAskMode() {
         tools
     })
 
-    const result = await agent.generate({prompt: questions.trim()})
+    const result = await withSpinner(
+        {
+            message: "Thinking…",
+            doneMessage: "here's the answer",
+            failMessage: "couldn't get an answer",
+        },
+        () => agent.generate({ prompt: questions.trim() }),
+    );
     const answer = result.text?.trim() || "(agent returned empty response)"
 
     console.log("\n"+renderTerminalMarkdown(answer)+"\n")
@@ -133,6 +141,15 @@ export async function runAskMode() {
     const ok = await runApprovalFlow(tracker)
     if(!ok) return executor.clearStaging()
 
-    executor.applyApprovedFromTracker()
+    await withSpinner(
+        {
+            message: "Saving response…",
+            doneMessage: "response saved",
+            failMessage: "save failed",
+        },
+        async () => {
+            executor.applyApprovedFromTracker();
+        },
+    );
     executor.clearStaging()
 }
