@@ -107,7 +107,7 @@ export async function runAskMode() {
 
     const result = await withSpinner(
         {
-            message: "Thinking…",
+            message: "Thinking...",
             doneMessage: "here's the answer",
             failMessage: "couldn't get an answer",
         },

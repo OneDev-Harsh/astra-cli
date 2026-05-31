@@ -37,7 +37,7 @@ export async function runAgentMode() {
 
     const result = await withSpinner(
         {
-            message: "Agent is working on your task…",
+            message: "Agent is working on your task...",
             doneMessage: "done",
             failMessage: "something went wrong",
         },

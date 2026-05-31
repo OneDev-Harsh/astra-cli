@@ -14,6 +14,7 @@ import { defaultAgentConfig } from "../agent/types";
 import type { Plan, PlanStep } from "./types";
 import { createWebTools } from "./web-tools";
 import { withSpinner } from "../../tui/spinner";
+import { getEnv } from "../../ai/config-loader";
 
 const planSchema = z.object({
   researchSummary: z.string().optional(),
@@ -92,54 +93,62 @@ function readOnlyTools(executor: ToolExecutor) {
   };
 }
 
-const PLAN_INSTRUCTIONS = (codebase: string, hasWeb: boolean): string => [
-    'You are a Plan-Mode planner. You DO NOT modify files.',
-    `Workspace: ${codebase}`,
-    'Use read-only tools for codebase/skills research.',
-    hasWeb ? 'Web tools are available (web_search/web_crawl/fetch_url). Use only when needed.' : 'Web tools are unavailable.',
-    'Output must match the provided JSON schema.',
-    'Keep it short: 1-20 steps.'
-].join('\n')
+const PLAN_INSTRUCTIONS = (
+  codebase: string,
+  hasWeb: boolean,
+): string => [
+  "You are a Plan-Mode planner. You DO NOT modify files.",
+  `Workspace: ${codebase}`,
+  "Use read-only tools for codebase/skills research.",
+  hasWeb
+    ? "Web tools are available (web_search/web_crawl/fetch_url). Use only when needed."
+    : "Web tools are unavailable.",
+  "Output must match the provided JSON schema.",
+  "Keep it short: 1-20 steps.",
+].join("\n");
 
 export async function generatePlan(goal: string) {
-    const config = defaultAgentConfig()
-    const tracker = new ActionTracker()
-    const executor = new ToolExecutor(tracker, config)
+  const config = defaultAgentConfig();
+  const tracker = new ActionTracker();
+  const executor = new ToolExecutor(tracker, config);
 
-    const hasWeb = !!process.env.FIRECRAWL_API_KEY
-    const model = wrapLanguageModel({
-        model: getAgentModel(),
-        middleware: extractJsonMiddleware()
-    })
+  const hasWeb = !!getEnv("FIRECRAWL_API_KEY");
+  const model = wrapLanguageModel({
+    model: getAgentModel(),
+    middleware: extractJsonMiddleware(),
+  });
 
-    const tools = {...readOnlyTools(executor), ...(hasWeb?createWebTools(tracker):{})}
+  const tools = {
+    ...readOnlyTools(executor),
+    ...(hasWeb ? createWebTools(tracker) : {}),
+  };
 
-    const result = await withSpinner(
-        {
-            message: "Researching & drafting plan…",
-            doneMessage: "plan ready",
-            failMessage: "planning failed",
-        },
-        () =>
-            generateText({
-                model,
-                tools,
-                stopWhen: stepCountIs(30),
-                system: PLAN_INSTRUCTIONS(config.codebasePath, false),
-                prompt: `User goal: \n${goal}`,
-                output: Output.object({ schema: planSchema }),
-            }),
-    );
+  const result = await withSpinner(
+    {
+      message: "Researching & drafting plan…",
+      doneMessage: "plan ready",
+      failMessage: "planning failed",
+    },
+    () =>
+      generateText({
+        model,
+        tools,
+        stopWhen: stepCountIs(30),
+        system: PLAN_INSTRUCTIONS(config.codebasePath, hasWeb),
+        prompt: `User goal: \n${goal}`,
+        output: Output.object({ schema: planSchema }),
+      }),
+  );
 
-    const validated = planSchema.parse(result.output)
+  const validated = planSchema.parse(result.output);
 
-    const steps:PlanStep[] = validated.steps.map((s,i) => ({
-        id: `step-${i+1}`,
-        title: s.title,
-        description: s.description,
-        hints: s.hints,
-        complexity: s.complexity,
-    }))
+  const steps: PlanStep[] = validated.steps.map((s, i) => ({
+    id: `step-${i + 1}`,
+    title: s.title,
+    description: s.description,
+    hints: s.hints,
+    complexity: s.complexity,
+  }));
 
-    return {goal, researchSummary: validated.researchSummary, steps}
+  return { goal, researchSummary: validated.researchSummary, steps };
 }

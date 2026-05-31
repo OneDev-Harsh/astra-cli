@@ -91,7 +91,7 @@ export async function runPlanMode():Promise<void>{
 
     await withSpinner(
         {
-            message: "Applying approved changes…",
+            message: "Applying approved changes...",
             doneMessage: "all changes applied",
             failMessage: "some operations failed",
         },
