@@ -82,13 +82,16 @@ export async function runPlanMode():Promise<void>{
                 }),
         );
 
-        if(r.text) console.log(renderTerminalMarkdown(r.text))
+        if(r.text.trim()) console.log(renderTerminalMarkdown(r.text))
     }
 
     const ok = await runApprovalFlow(tracker)
 
-    if(!ok) { executor.discardChanges(); return; }
-
+    if(!ok) {
+        executor.discardChanges();
+        return;
+    }
+    
     await withSpinner(
         {
             message: "Applying approved changes...",

@@ -1,15 +1,13 @@
 import {
   Output,
-  extractJsonMiddleware,
   generateText,
   stepCountIs,
-  tool,
-  wrapLanguageModel,
 } from "ai";
 import z from "zod";
 import { getAgentModel } from "../../ai";
 import { ActionTracker } from "../agent/action-tracker";
 import { ToolExecutor } from "../agent/tool-executor";
+import { createAgentTools } from "../agent/agent-tools";
 import { defaultAgentConfig } from "../agent/types";
 import type { Plan, PlanStep } from "./types";
 import { createWebTools } from "./web-tools";
@@ -31,66 +29,39 @@ const planSchema = z.object({
     .max(20),
 });
 
-function readOnlyTools(executor: ToolExecutor) {
-  return {
-    read_file: tool({
-      description:
-        "Read a text file from the workspace. Use a path relative to the project root.",
-      inputSchema: z.object({
-        path: z.string().describe("Relative file path"),
-      }),
-      execute: async ({ path: p }) => executor.readFile(p),
-    }),
-
-    list_files: tool({
-      description: "List files and directories under a path.",
-      inputSchema: z.object({
-        path: z.string(),
-        recursive: z.boolean().optional().default(false),
-      }),
-      execute: async ({ path: p, recursive }) =>
-        executor.listFiles(p, recursive),
-    }),
-
-    search_files: tool({
-      description:
-        'Find files matching a glob pattern (e.g. "*.ts", "**/*.md"). Optional content substring filter.',
-      inputSchema: z.object({
-        root: z.string().describe("Directory to search, relative to root"),
-        pattern: z
-          .string()
-          .describe("Glob-like pattern using * and ** (forward slashes)"),
-        content_contains: z.string().optional(),
-      }),
-      execute: async ({ root, pattern, content_contains }) =>
-        executor.searchFiles(root, pattern, content_contains),
-    }),
-
-    analyze_codebase: tool({
-      description:
-        "Summarize structure: file counts, size, extensions. Read-only.",
-      inputSchema: z.object({
-        path: z.string().default("."),
-      }),
-      execute: async ({ path: p }) => executor.analyzeCodebase(p),
-    }),
-
-    list_skills: tool({
-      description:
-        "List absolute paths to SKILL.md files under configured skill directories (Cursor / Claude).",
-      inputSchema: z.object({}),
-      execute: async () => executor.listSkills(),
-    }),
-
-    read_skill: tool({
-      description:
-        "Read a SKILL.md file. Path must be absolute and under skill roots, or use a path returned by list_skills.",
-      inputSchema: z.object({
-        path: z.string(),
-      }),
-      execute: async ({ path: p }) => executor.readSkill(p),
-    }),
-  };
+/**
+ * Read-only subset of agent tools for the planner.
+ * Strips all mutation, shell, staging, and executor web tools
+ * (web is provided by createWebTools when FIRECRAWL_API_KEY is set).
+ */
+function createPlannerTools(executor: ToolExecutor) {
+  const all = createAgentTools(executor);
+  const {
+    create_file: _cf,
+    modify_file: _mf,
+    delete_file: _df,
+    create_folder: _cfo,
+    replace_in_file: _rif,
+    append_to_file: _atf,
+    insert_at_line: _ial,
+    run_command: _rc,
+    run_background_command: _rbc,
+    execute_shell: _es,
+    apply_changes: _ac,
+    discard_changes: _dc,
+    show_pending_changes: _spc,
+    run_tests: _rt,
+    run_test_file: _rtf,
+    lint_project: _lp,
+    format_project: _fp,
+    create_plan: _cp,
+    get_plan: _gp,
+    // strip executor's curl-based web tools — superseded by createWebTools (Firecrawl)
+    web_search: _ws,
+    fetch_url: _fu,
+    ...readOnly
+  } = all;
+  return readOnly;
 }
 
 const PLAN_INSTRUCTIONS = (
@@ -113,13 +84,9 @@ export async function generatePlan(goal: string) {
   const executor = new ToolExecutor(tracker, config);
 
   const hasWeb = !!getEnv("FIRECRAWL_API_KEY");
-  const model = wrapLanguageModel({
-    model: getAgentModel(),
-    middleware: extractJsonMiddleware(),
-  });
 
   const tools = {
-    ...readOnlyTools(executor),
+    ...createPlannerTools(executor),
     ...(hasWeb ? createWebTools(tracker) : {}),
   };
 
@@ -131,7 +98,7 @@ export async function generatePlan(goal: string) {
     },
     () =>
       generateText({
-        model,
+        model: getAgentModel(),
         tools,
         stopWhen: stepCountIs(30),
         system: PLAN_INSTRUCTIONS(config.codebasePath, hasWeb),

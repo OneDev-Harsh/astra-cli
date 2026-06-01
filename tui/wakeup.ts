@@ -16,7 +16,7 @@ function printBanner(ascii: string) {
     );
 
     console.log(
-        chalk.gray("v0.0.1")
+        chalk.gray("v0.1.0")
     );
 
     console.log();
