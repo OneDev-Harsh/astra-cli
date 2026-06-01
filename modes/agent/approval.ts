@@ -72,7 +72,7 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
     const choice = await select({
         message: "Apply staged changes?",
         options: [
-            {value: "all", label: "Approval and apply all"},
+            {value: "all", label: "Approve and apply all"},
             {value: "select", label: "Review one by one"},
             {value: "cancel", label: "Cancel"},
         ]

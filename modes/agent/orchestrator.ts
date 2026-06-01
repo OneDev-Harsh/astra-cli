@@ -59,10 +59,10 @@ export async function runAgentMode() {
             }),
     );
 
-    if(result.text?.trim()) console.log(renderTerminalMarkdown(result.text))
+    if(result.text.trim()) console.log(renderTerminalMarkdown(result.text))
 
     const ok = await runApprovalFlow(tracker);
-    if(!ok) return executor.clearStaging()
+    if(!ok) return executor.discardChanges()
 
     await withSpinner(
         {
@@ -85,5 +85,5 @@ export async function runAgentMode() {
         },
     );
 
-    executor.clearStaging()
+    executor.discardChanges()
 }

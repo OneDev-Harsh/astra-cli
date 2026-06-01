@@ -3,6 +3,7 @@ import { isMutationType } from "./types";
 
 export class ActionTracker{
     private actions:ActionLog[] = []
+    private counter = 0
 
     log(
         entry: Omit<ActionLog, 'id' | 'timestamp'> & {
@@ -11,7 +12,7 @@ export class ActionTracker{
         },
     ):ActionLog {
         const action:ActionLog = {
-            id: entry.id ?? `action_${this.actions.length}`,
+            id: entry.id ?? `action_${this.counter++}`,
             timestamp: entry.timestamp ?? new Date(),
             type: entry.type,
             path: entry.path,

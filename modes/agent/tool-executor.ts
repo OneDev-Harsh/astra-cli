@@ -1,10 +1,9 @@
-import fs from 'fs'
+import fs, { existsSync, readFileSync } from 'fs'
 import path from 'path'
 import { homedir } from 'os'
-import { spawnSync } from 'child_process'
+import { spawnSync, spawn } from 'child_process'
 import type { AgentConfig, ActionLog } from './types'
 import { ActionTracker } from './action-tracker'
-import { error } from 'console'
 
 const TEXT_EXT = new Set([
     '.ts',
@@ -22,6 +21,32 @@ const TEXT_EXT = new Set([
     '.yaml',
     '.toml',
     '.txt',
+    '.sql',
+    '.graphql',
+    '.gql',
+    '.sh',
+    '.bash',
+    '.zsh',
+    '.py',
+    '.go',
+    '.rs',
+    '.java',
+    '.kt',
+    '.swift',
+    '.php',
+    '.rb',
+    '.vue',
+    '.svelte',
+    '.xml',
+    '.ini',
+    '.conf',
+    '.dockerfile',
+    '.env.example',
+    '.gitignore',
+    '.editorconfig',
+    '.prettierrc',
+    '.eslintrc',
+    '.lock',
     //add more for expansion
 ])
 
@@ -58,7 +83,7 @@ export class ToolExecutor{
         
         for(const pat of this.config.excludePatterns){
             if(pat==='*.log' && base.endsWith('.log')) return true
-            if(pat==='.env*' && base.endsWith('.env')) return true
+            if(pat==='.env*' && base.startsWith('.env')) return true
             if(pat.includes('*')) continue
             if(segments.includes(pat) || norm===pat || norm.startsWith(`${pat}/`)) return true
         }
@@ -220,9 +245,9 @@ export class ToolExecutor{
         const regexFromGlob = (g: string): RegExp => {
         const escaped = g
             .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-            .replace(/\*\*/g, "§§")
+            .replace(/\*\*/g, "��")
             .replace(/\*/g, "[^/\\\\]*")
-            .replace(/§§/g, ".*")
+            .replace(/��/g, ".*")
             .replace(/\?/g, ".");
         return new RegExp(`^${escaped}$`, "i");
         };
@@ -312,10 +337,515 @@ export class ToolExecutor{
         return `Shell queued: ${command}`;
     }
 
+    readMultipleFiles(paths: string[]) {
+        const result: Record<string, string> = {};
+
+        for (const rel of paths) {
+            this.assertNotExcluded(rel, "read_multiple_files");
+
+            const content = this.getEffectiveText(rel);
+
+            if (content === undefined)
+                throw new Error(`File not found: ${rel}`);
+
+            result[rel] = content;
+        }
+
+        return result;
+    }
+
+    replaceInFile(
+        rel: string,
+        search: string,
+        replace: string
+    ): string {
+
+        if (!this.config.tools.allowFileModification)
+            throw new Error("File modification disabled");
+
+        this.assertNotExcluded(rel, "replace_in_file");
+
+        const before = this.getEffectiveText(rel);
+
+        if (before === undefined)
+            throw new Error(`File not found: ${rel}`);
+
+        if (!before.includes(search))
+            throw new Error(`Search text not found in ${rel}`);
+
+        const after = before.replace(search, replace);
+
+        const key = this.norm(rel);
+
+        this.overlay.set(key, after);
+        this.deleted.delete(key);
+
+        this.tracker.log({
+            type: "file_modify",
+            path: key,
+            details: {
+                before,
+                after
+            },
+            status: "pending"
+        });
+
+        return `Staged replacement in ${key}`;
+    }
+
+    appendToFile(
+        rel: string,
+        content: string
+    ): string {
+
+        if (!this.config.tools.allowFileModification)
+            throw new Error("File modification disabled");
+
+        this.assertNotExcluded(rel, "append_to_file");
+
+        const before = this.getEffectiveText(rel);
+
+        if (before === undefined)
+            throw new Error(`File not found: ${rel}`);
+
+        const after = before + content;
+
+        const key = this.norm(rel);
+
+        this.overlay.set(key, after);
+
+        this.tracker.log({
+            type: "file_modify",
+            path: key,
+            details: {
+                before,
+                after
+            },
+            status: "pending"
+        });
+
+        return `Staged append: ${key}`;
+    }
+
+    insertAtLine(
+        rel: string,
+        line: number,
+        content: string
+    ): string {
+
+        if (!this.config.tools.allowFileModification)
+            throw new Error("File modification disabled");
+
+        this.assertNotExcluded(rel, "insert_at_line");
+
+        const before = this.getEffectiveText(rel);
+
+        if (before === undefined)
+            throw new Error(`File not found: ${rel}`);
+
+        const lines = before.split("\n");
+
+        if (line < 1 || line > lines.length + 1)
+            throw new Error(`Invalid line number: ${line}`);
+
+        lines.splice(line - 1, 0, content);
+
+        const after = lines.join("\n");
+
+        const key = this.norm(rel);
+
+        this.overlay.set(key, after);
+
+        this.tracker.log({
+            type: "file_modify",
+            path: key,
+            details: {
+                before,
+                after
+            },
+            status: "pending"
+        });
+
+        return `Inserted content at line ${line} in ${key}`;
+    }
+
+    showPendingChanges() {
+        return this.tracker
+            .getPendingMutations()
+    }
+
+    discardChanges(): string {
+        this.overlay.clear()
+        this.deleted.clear()
+        return "Discarded all staged changes"
+    }
+
+    gitStatus() {
+
+        const result = spawnSync(
+            "git",
+            ["status", "--short"],
+            {
+                cwd: this.config.codebasePath,
+                encoding: "utf8"
+            }
+        );
+
+        return result.stdout.trim();
+    }
+
+    gitDiff(staged = false) {
+
+        const args = staged
+            ? ["diff", "--staged"]
+            : ["diff"];
+
+        const result = spawnSync(
+            "git",
+            args,
+            {
+                cwd: this.config.codebasePath,
+                encoding: "utf8"
+            }
+        );
+
+        return result.stdout;
+    }
+
+    gitLog(limit = 20) {
+
+        const result = spawnSync(
+            "git",
+            [
+                "log",
+                "--oneline",
+                `-${limit}`
+            ],
+            {
+                cwd: this.config.codebasePath,
+                encoding: "utf8"
+            }
+        );
+
+        return result.stdout.trim();
+    }
+
+    runCommand(
+        command: string,
+        cwd?: string
+    ) {
+        const resolvedCwd = cwd
+            ? this.resolveSafe(cwd)
+            : this.config.codebasePath;
+
+        const result = spawnSync(
+            command,
+            {
+                cwd: resolvedCwd,
+                shell: true,
+                encoding: "utf8",
+                maxBuffer: 1024 * 1024 * 10
+            }
+        );
+
+        return {
+            exitCode: result.status,
+            stdout: result.stdout,
+            stderr: result.stderr
+        };
+    }
+
+    runBackgroundCommand(args: { command: string; cwd?: string }): string {
+        if (!this.config.tools.allowShellExecution)
+            throw new Error("Shell execution disabled");
+        const resolvedCwd = args.cwd
+            ? this.resolveSafe(args.cwd)
+            : this.config.codebasePath;
+        this.tracker.log({
+            type: "tool_execute",
+            path: "shell",
+            details: { command: args.command, toolName: "run_background_command" },
+            status: "pending",
+        });
+        // Spawn detached so it outlives the current call
+        const child = spawn(args.command, {
+            cwd: resolvedCwd,
+            shell: true,
+            detached: true,
+            stdio: "ignore",
+        });
+        child.unref();
+        return `Background process started (pid ${child.pid}): ${args.command}`;
+    }
+
+    grep(args: { root: string; query: string; caseSensitive: boolean }): string {
+        this.assertNotExcluded(args.root, "grep");
+        const rootAbs = this.resolveSafe(args.root);
+        if (!fs.existsSync(rootAbs))
+            throw new Error(`grep: root not found: ${args.root}`);
+
+        const flags = args.caseSensitive ? "" : "i";
+        const re = new RegExp(args.query, flags);
+        const matches: string[] = [];
+
+        const walk = (dir: string) => {
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, ent.name);
+                const relP = path
+                    .relative(this.config.codebasePath, full)
+                    .split(path.sep)
+                    .join("/");
+                if (this.excluded(relP)) continue;
+                if (ent.isDirectory()) {
+                    walk(full);
+                } else if (isProbablyTextFile(full)) {
+                    const text = fs.readFileSync(full, "utf8");
+                    const lines = text.split("\n");
+                    lines.forEach((line: string, idx: number) => {
+                        if (re.test(line))
+                            matches.push(`${relP}:${idx + 1}: ${line.trim()}`);
+                    });
+                }
+            }
+        };
+
+        if (fs.statSync(rootAbs).isDirectory()) walk(rootAbs);
+        else if (isProbablyTextFile(rootAbs)) {
+            const text = fs.readFileSync(rootAbs, "utf8");
+            const lines = text.split("\n");
+            lines.forEach((line: string, idx: number) => {
+                if (re.test(line))
+                    matches.push(`${args.root}:${idx + 1}: ${line.trim()}`);
+            });
+        }
+
+        const out = matches.join("\n");
+        this.tracker.log({
+            type: "code_analysis",
+            path: this.norm(args.root),
+            details: { after: out || "(no matches)", toolName: "grep" },
+            status: "executed",
+        });
+        return out || "(no matches)";
+    }
+
+    readPackageJson(): string {
+        const pkgPath = path.join(this.config.codebasePath, "package.json");
+        if (!fs.existsSync(pkgPath))
+            throw new Error("package.json not found in workspace root");
+        const text = fs.readFileSync(pkgPath, "utf8");
+        const pkg = JSON.parse(text);
+        const summary = {
+            name: pkg.name,
+            version: pkg.version,
+            description: pkg.description,
+            scripts: pkg.scripts ?? {},
+            dependencies: Object.keys(pkg.dependencies ?? {}),
+            devDependencies: Object.keys(pkg.devDependencies ?? {}),
+        };
+        this.tracker.log({
+            type: "code_analysis",
+            path: "package.json",
+            details: { after: JSON.stringify(summary, null, 2), toolName: "read_package_json" },
+            status: "executed",
+        });
+        return JSON.stringify(summary, null, 2);
+    }
+
+    runTests(filter?: string): { exitCode: number | null; stdout: string; stderr: string } {
+        const pkgPath = path.join(this.config.codebasePath, "package.json");
+        let testCmd = "npm test";
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            if (pkg.scripts?.test) testCmd = "npm test";
+            else if (pkg.devDependencies?.vitest || pkg.dependencies?.vitest)
+                testCmd = "npx vitest run";
+            else if (pkg.devDependencies?.jest || pkg.dependencies?.jest)
+                testCmd = "npx jest";
+        }
+        const cmd = filter ? `${testCmd} -- ${filter}` : testCmd;
+        return this.runCommand(cmd);
+    }
+
+    runTestFile(filePath: string): { exitCode: number | null; stdout: string; stderr: string } {
+        this.assertNotExcluded(filePath, "run_test_file");
+        const pkgPath = path.join(this.config.codebasePath, "package.json");
+        let runner = "npx jest";
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            if (pkg.devDependencies?.vitest || pkg.dependencies?.vitest)
+                runner = "npx vitest run";
+        }
+        return this.runCommand(`${runner} ${filePath}`);
+    }
+
+    lintProject(): { exitCode: number | null; stdout: string; stderr: string } {
+        const pkgPath = path.join(this.config.codebasePath, "package.json");
+        let lintCmd = "npx eslint .";
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            if (pkg.scripts?.lint) lintCmd = "npm run lint";
+        }
+        return this.runCommand(lintCmd);
+    }
+
+    formatProject(): { exitCode: number | null; stdout: string; stderr: string } {
+        const pkgPath = path.join(this.config.codebasePath, "package.json");
+        let fmtCmd = "npx prettier --write .";
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            if (pkg.scripts?.format) fmtCmd = "npm run format";
+        }
+        return this.runCommand(fmtCmd);
+    }
+
+    webSearch(query: string): string {
+        // Executes a curl-based DuckDuckGo search and returns plain-text results.
+        // For richer integration, replace with a proper search API call.
+        const encoded = encodeURIComponent(query);
+        const result = spawnSync(
+            "curl",
+            [
+                "-s",
+                "-A", "Mozilla/5.0",
+                `https://html.duckduckgo.com/html/?q=${encoded}`,
+            ],
+            { encoding: "utf8", maxBuffer: 1024 * 1024 * 5 }
+        );
+        if (result.status !== 0)
+            return `web_search error: ${result.stderr ?? "unknown"}`;
+        // Strip HTML tags for a plain-text approximation
+        const text = result.stdout
+            .replace(/<style[\s\S]*?<\/style>/gi, "")
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+            .slice(0, 4000);
+        this.tracker.log({
+            type: "code_analysis",
+            path: "web",
+            details: { after: text, toolName: "web_search" },
+            status: "executed",
+        });
+        return text;
+    }
+
+    fetchUrl(url: string): string {
+        const result = spawnSync(
+            "curl",
+            ["-s", "-L", "-A", "Mozilla/5.0", "--max-time", "15", url],
+            { encoding: "utf8", maxBuffer: 1024 * 1024 * 5 }
+        );
+        if (result.status !== 0)
+            return `fetch_url error: ${result.stderr ?? "unknown"}`;
+        const text = result.stdout
+            .replace(/<style[\s\S]*?<\/style>/gi, "")
+            .replace(/<script[\s\S]*?<\/script>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s{2,}/g, " ")
+            .trim()
+            .slice(0, 8000);
+        this.tracker.log({
+            type: "code_analysis",
+            path: url,
+            details: { after: text, toolName: "fetch_url" },
+            status: "executed",
+        });
+        return text;
+    }
+
+    private plan: { goal: string; steps: string[] } | null = null;
+
+    createPlan(goal: string): string {
+        this.plan = { goal, steps: [] };
+        this.tracker.log({
+            type: "code_analysis",
+            path: "plan",
+            details: { after: goal, toolName: "create_plan" },
+            status: "executed",
+        });
+        return `Plan created for goal: "${goal}". Use get_plan to retrieve it.`;
+    }
+
+    getPlan(): string {
+        if (!this.plan) return "(no active plan)";
+        return JSON.stringify(this.plan, null, 2);
+    }
+
+    applyChanges(): { errors: string[] } {
+        // Promote all pending overlay/deleted entries to "approved" then apply.
+        for (const action of this.tracker.getActions()) {
+            if (action.status === "pending") {
+                action.status = "approved";
+            }
+        }
+        return this.applyApprovedFromTracker();
+    }
+
+    workspaceContext() {
+
+        return {
+            root: this.config.codebasePath,
+            pendingChanges: this.overlay.size,
+            pendingDeletes: this.deleted.size,
+            git: this.gitStatus(),
+            trackedActions: this.tracker
+                .getPendingMutations()
+                .length
+        };
+    }
+
+    detectFramework() {
+
+        const pkgPath = path.join(
+            this.config.codebasePath,
+            "package.json"
+        );
+
+        if (!existsSync(pkgPath))
+            return {
+                framework: "unknown"
+            };
+
+        const pkg = JSON.parse(
+            readFileSync(pkgPath, "utf8")
+        );
+
+        const deps = {
+            ...pkg.dependencies,
+            ...pkg.devDependencies
+        };
+
+        if ("next" in deps)
+            return {
+                framework: "Next.js"
+            };
+
+        if ("react" in deps)
+            return {
+                framework: "React"
+            };
+
+        if ("vue" in deps)
+            return {
+                framework: "Vue"
+            };
+
+        if ("svelte" in deps)
+            return {
+                framework: "Svelte"
+            };
+
+        return {
+            framework: "Node.js"
+        };
+    }
+
     skillRoots(): string[] {
         const extra =
         process.env.SKILLS_DIRS?.split(/[;]/)
-            .map((s) => s.trim())
+            .map((s: string) => s.trim())
             .filter(Boolean) ?? [];
         return [
         ...extra,
@@ -425,8 +955,4 @@ export class ToolExecutor{
         return { errors };
     }
 
-    clearStaging():void{
-        this.overlay.clear()
-        this.deleted.clear()
-    }
 }

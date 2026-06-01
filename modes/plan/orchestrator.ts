@@ -87,7 +87,7 @@ export async function runPlanMode():Promise<void>{
 
     const ok = await runApprovalFlow(tracker)
 
-    if(!ok) return executor.clearStaging()
+    if(!ok) { executor.discardChanges(); return; }
 
     await withSpinner(
         {
@@ -106,5 +106,5 @@ export async function runPlanMode():Promise<void>{
         },
     );
 
-    executor.clearStaging();
+    executor.discardChanges();
 }
