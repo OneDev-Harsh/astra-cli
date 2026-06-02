@@ -282,23 +282,21 @@ export function createAgentTools(executor: ToolExecutor){
 
         show_pending_changes: tool({
         description:
-            "Show staged file operations.",
+            "Show staged file operations (read-only display - does NOT apply changes). Use this to review what would be modified before user approval.",
         inputSchema: z.object({}),
         execute: async () =>
             executor.showPendingChanges()
         }),
 
-        apply_changes: tool({
-        description:
-            "Apply staged operations.",
-        inputSchema: z.object({}),
-        execute: async () =>
-            executor.applyChanges()
-        }),
+        // ❌ REMOVED: apply_changes
+        // This tool has been removed because applying changes must go through
+        // the runApprovalFlow() in orchestrator.ts which requires explicit
+        // user approval. Agents should never auto-apply changes without
+        // user consent.
 
         discard_changes: tool({
         description:
-            "Discard staged operations.",
+            "Discard all staged operations (useful if you want to start over).",
         inputSchema: z.object({}),
         execute: async () =>
             executor.discardChanges()

@@ -773,7 +773,19 @@ export class ToolExecutor{
         return JSON.stringify(this.plan, null, 2);
     }
 
-    applyChanges(): { errors: string[] } {
+    /**
+     * Private method: Emergency auto-approve (not exposed as a tool)
+     * 
+     * WARNING: This should only be used in emergency scenarios where you need
+     * to force-apply all pending changes. Normal usage should go through
+     * runApprovalFlow() which requires explicit user approval.
+     * 
+     * This method is NOT exposed as an agent tool to prevent accidental
+     * auto-application of changes without user consent.
+     * 
+     * @deprecated Use orchestrator.runApprovalFlow() instead for normal workflows
+     */
+    private applyChanges(): { errors: string[] } {
         // Promote all pending overlay/deleted entries to "approved" then apply.
         for (const action of this.tracker.getActions()) {
             if (action.status === "pending") {

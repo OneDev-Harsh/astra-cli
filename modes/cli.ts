@@ -3,6 +3,7 @@ import {select, isCancel} from "@clack/prompts"
 import { runAgentMode } from "./agent/orchestrator";
 import { runAskMode } from "./ask/orchestrator";
 import { runPlanMode } from "./plan/orchestrator";
+import { runMultiAgentMode } from "./multi/orchestrator";
 
 export async function runCliMode () {
     while(true){
@@ -12,6 +13,7 @@ export async function runCliMode () {
                 {value: "agent", label:"Agent Mode"},
                 {value: "plan", label:"Plan Mode"},
                 {value: "ask", label:"Ask Mode"},
+                {value: "multi", label: "Multi-Agent Mode"},
                 {value: "back", label:" ⬅ Back to main menu"},
             ]
         })
@@ -26,7 +28,10 @@ export async function runCliMode () {
         else if(mode==="ask"){
             await runAskMode()
         }
-        if(mode!=="agent" && mode!=="plan" && mode!=="ask"){
+        else if(mode==="multi"){
+            await runMultiAgentMode()
+        }
+        if(mode!=="agent" && mode!=="plan" && mode!=="ask" && mode!=="multi"){
             console.log(chalk.yellow('\n This mode is not implemented yet. \n'))
         }
     }

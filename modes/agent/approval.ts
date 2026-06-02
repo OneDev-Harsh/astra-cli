@@ -62,13 +62,29 @@ function groupPending(pending: ActionLog[]): ReviewGroup[] {
     return groups;
 }
 
+/**
+ * Run the approval flow for staged changes.
+ * 
+ * This function:
+ * 1. Checks if there are any pending changes
+ * 2. If none, returns false (nothing to approve)
+ * 3. If yes, prompts user to approve all, review individually, or cancel
+ * 4. Updates tracker with user's approval decisions
+ * 5. Returns true if ANY changes were approved, false if all rejected/cancelled
+ * 
+ * @param tracker ActionTracker with pending mutations
+ * @returns true if user approved any changes, false otherwise
+ */
 export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
     const pending = tracker.getPendingMutations()
+    
+    // No changes to review
     if(pending.length === 0){
         console.log(chalk.dim('\nNo staged file, folder or shell changes to review.\n'))
-        return false
+        return false  // ✓ Correct: nothing to approve
     }
 
+    // Ask user how to proceed
     const choice = await select({
         message: "Apply staged changes?",
         options: [
@@ -78,21 +94,29 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
         ]
     })
 
+    // User cancelled
     if(isCancel(choice) || choice === "cancel"){
+        // Mark all as rejected
         for(const a of pending){
             tracker.updateStatus(a.id, "rejected", false)
         }
-        return false
+        return false  // ✓ Correct: user rejected all
     }
 
+    // User selected "Approve all" - approve everything and return immediately
     if(choice === "all"){
         for(const a of pending){
             tracker.updateStatus(a.id, "approved", true)
         }
-        return true
+        return true  // ✓ IMPORTANT: return immediately without asking about each change
     }
 
-    for(const g of groupPending(pending)){
+    // User selected "Review one by one"
+    // Groups changes by file for easier review
+    const groups = groupPending(pending);
+    
+    for(const g of groups){
+        // Keep asking about this group until user makes a choice
         while(true){
             const opt = await select({
                 message: chalk.bold(g.label),
@@ -103,11 +127,15 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
                 ],
             })
 
+            // User hit Ctrl+C during review
             if(isCancel(opt)){
-                for(const a of pending) tracker.updateStatus(a.id, "rejected", false)
+                for(const a of pending) {
+                    tracker.updateStatus(a.id, "rejected", false)
+                }
                 return false
             }
 
+            // User wants to see the diff
             if(opt === "diff"){
                 if (g.patch) {
                     console.log(
@@ -116,16 +144,26 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
                         "\n",
                     );
                 }
+                // ✓ Loop continues, ask again for this group
                 continue;
             }
 
+            // User accepted or rejected this group
+            // opt === "accept" or opt === "reject"
             for(const id of g.actionIds){
-                tracker.updateStatus(id, opt==="accept"?"approved":"rejected", opt==="accept")
+                tracker.updateStatus(
+                    id, 
+                    opt === "accept" ? "approved" : "rejected",
+                    opt === "accept"
+                )
             }
-
+            
+            // ✓ Break inner loop, move to next group
             break
         }
     }
 
+    // ✓ Return true only if user approved ANY changes
+    // If user rejected all, this returns false (nothing gets applied)
     return tracker.getActions().some((a) => a.status === "approved")
 }
