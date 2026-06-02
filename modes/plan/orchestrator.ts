@@ -13,6 +13,8 @@ import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { runApprovalFlow } from "../agent/approval";
 import { createWebTools } from "./web-tools";
 import { withSpinner } from "../../tui/spinner";
+import { beginSession, endSession, markSessionInterrupted } from "../../session";
+import { createSessionTools } from "../../session/session-tools";
 
 function stepPrompt(goal: string, step: PlanStep): string {
   return [`Goal: ${goal}`, `Step: ${step.title}`, step.description].join('\n');
@@ -25,6 +27,17 @@ export async function runPlanMode():Promise<void>{
         message: "What is your goal?"
     })
     if(isCancel(goal) || !goal.trim()) return
+
+    // ── Session management ──────────────────────────────────────────────
+    const config = defaultAgentConfig()
+    const tracker = new ActionTracker()
+    const executor = new ToolExecutor(tracker, config)
+
+    const { entry: sessionEntry } = beginSession({
+        workspacePath: config.codebasePath,
+        mode: "plan",
+        goal: goal.trim(),
+    });
 
     const plan = await generatePlan(goal)
 
@@ -40,58 +53,65 @@ export async function runPlanMode():Promise<void>{
 
     if (isCancel(proceed) || !proceed) return
 
-    const config = defaultAgentConfig()
-    const tracker = new ActionTracker()
-    const executor = new ToolExecutor(tracker, config)
-
     const tools = {
         ...createAgentTools(executor),
-        ...createWebTools(tracker)
+        ...createWebTools(tracker),
+        ...createSessionTools(config.codebasePath),
     }
 
-    for(const step of selected){
-        console.log(chalk.bold(`\n🔧 ${step.title}\n`))
+    let lastResponse = "";
+    try {
+        for(const step of selected){
+            console.log(chalk.bold(`\n🔧 ${step.title}\n`))
 
-        const agent = new ToolLoopAgent({
-            model: getAgentModel(),
-            stopWhen: stepCountIs(50),
-            tools,
-        })
+            const agent = new ToolLoopAgent({
+                model: getAgentModel(),
+                stopWhen: stepCountIs(50),
+                tools,
+            })
 
-        const r = await withSpinner(
-            {
-                message: `Executing: ${step.title}`,
-                doneMessage: "done",
-                failMessage: "failed",
-            },
-            () =>
-                agent.generate({
-                    prompt: stepPrompt(plan.goal, step),
-                    onStepFinish: ({ toolCalls }) => {
-                        for (const tc of toolCalls) {
-                            const preview = JSON.stringify(tc.input).slice(0, 160);
-                            console.log(
-                                chalk.green("  ✔"),
-                                chalk.bold(String(tc.toolName)),
-                                chalk.dim(
-                                    preview + (preview.length > 160 ? "..." : ""),
-                                ),
-                            );
-                        }
-                    },
-                }),
-        );
+            const r = await withSpinner(
+                {
+                    message: `Executing: ${step.title}`,
+                    doneMessage: "done",
+                    failMessage: "failed",
+                },
+                () =>
+                    agent.generate({
+                        prompt: stepPrompt(plan.goal, step),
+                        onStepFinish: ({ toolCalls }) => {
+                            for (const tc of toolCalls) {
+                                const preview = JSON.stringify(tc.input).slice(0, 160);
+                                console.log(
+                                    chalk.green("  ✔"),
+                                    chalk.bold(String(tc.toolName)),
+                                    chalk.dim(
+                                        preview + (preview.length > 160 ? "..." : ""),
+                                    ),
+                                );
+                            }
+                        },
+                    }),
+            );
 
-        if(r.text.trim()) console.log(renderTerminalMarkdown(r.text))
+            if(r.text.trim()) {
+                console.log(renderTerminalMarkdown(r.text));
+                lastResponse = r.text.trim();
+            }
+        }
+    } catch (error) {
+        markSessionInterrupted(sessionEntry.id);
+        throw error;
     }
 
     const ok = await runApprovalFlow(tracker)
 
     if(!ok) {
+        await endSession(sessionEntry.id, tracker, lastResponse || "Plan execution cancelled");
         executor.discardChanges();
         return;
     }
-    
+
     await withSpinner(
         {
             message: "Applying approved changes...",
@@ -109,5 +129,6 @@ export async function runPlanMode():Promise<void>{
         },
     );
 
+    await endSession(sessionEntry.id, tracker, lastResponse || "Plan executed with " + selected.length + " step(s).");
     executor.discardChanges();
 }

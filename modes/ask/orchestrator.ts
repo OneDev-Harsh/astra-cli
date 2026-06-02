@@ -11,6 +11,8 @@ import { runApprovalFlow } from "../agent/approval";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { createWebTools } from "../plan/web-tools";
 import { withSpinner } from "../../tui/spinner";
+import { beginSession, endSession, markSessionInterrupted } from "../../session";
+import { createSessionTools } from "../../session/session-tools";
 
 /**
  * Read-only subset of agent tools safe for ask mode.
@@ -67,38 +69,50 @@ export async function runAskMode() {
     const tracker = new ActionTracker();
     const executor = new ToolExecutor(tracker, config);
 
-    const tools = {
-        ...createReadOnlyTools(executor),
-        ...createWebTools(tracker),
-    };
+    // ── Session management ──────────────────────────────────────────────
+    const { entry: sessionEntry } = beginSession({
+        workspacePath: config.codebasePath,
+        mode: "ask",
+        goal: questions.trim(),
+    });
 
     const agent = new ToolLoopAgent({
         model: getAgentModel(),
         stopWhen: stepCountIs(25),
-        tools,
+        tools: {
+            ...createReadOnlyTools(executor),
+            ...createWebTools(tracker),
+            ...createSessionTools(config.codebasePath),
+        },
     });
 
-    const result = await withSpinner(
-        {
-            message: "Thinking...",
-            doneMessage: "here's the answer",
-            failMessage: "couldn't get an answer",
-        },
-        () =>
-            agent.generate({
-                prompt: questions.trim(),
-                onStepFinish: ({ toolCalls }) => {
-                    for (const tc of toolCalls) {
-                        const preview = JSON.stringify(tc.input).slice(0, 160);
-                        console.log(
-                            chalk.cyan("  ·"),
-                            chalk.bold(String(tc.toolName)),
-                            chalk.dim(preview + (preview.length > 160 ? "..." : "")),
-                        );
-                    }
-                },
-            }),
-    );
+    let result;
+    try {
+        result = await withSpinner(
+            {
+                message: "Thinking...",
+                doneMessage: "here's the answer",
+                failMessage: "couldn't get an answer",
+            },
+            () =>
+                agent.generate({
+                    prompt: questions.trim(),
+                    onStepFinish: ({ toolCalls }) => {
+                        for (const tc of toolCalls) {
+                            const preview = JSON.stringify(tc.input).slice(0, 160);
+                            console.log(
+                                chalk.cyan("  ·"),
+                                chalk.bold(String(tc.toolName)),
+                                chalk.dim(preview + (preview.length > 160 ? "..." : "")),
+                            );
+                        }
+                    },
+                }),
+        );
+    } catch (error) {
+        markSessionInterrupted(sessionEntry.id);
+        throw error;
+    }
 
     const answer = result.text.trim() || "(agent returned empty response)";
 
@@ -109,7 +123,10 @@ export async function runAskMode() {
         initialValue: false,
     });
 
-    if (isCancel(wantsSave) || !wantsSave) return;
+    if (isCancel(wantsSave) || !wantsSave) {
+        await endSession(sessionEntry.id, tracker, answer);
+        return;
+    }
 
     const filename = await text({
         message: "Filename",
@@ -124,7 +141,10 @@ export async function runAskMode() {
         },
     });
 
-    if (isCancel(filename)) return;
+    if (isCancel(filename)) {
+        await endSession(sessionEntry.id, tracker, answer);
+        return;
+    }
 
     // Enable file creation only for the explicit save step
     config.tools.allowFileCreation = true;
@@ -132,7 +152,10 @@ export async function runAskMode() {
     config.tools.allowFileCreation = false;
 
     const ok = await runApprovalFlow(tracker);
-    if (!ok) return executor.discardChanges();
+    if (!ok) {
+        await endSession(sessionEntry.id, tracker, answer);
+        return executor.discardChanges();
+    }
 
     await withSpinner(
         {
@@ -144,5 +167,7 @@ export async function runAskMode() {
             executor.applyApprovedFromTracker();
         },
     );
+
+    await endSession(sessionEntry.id, tracker, answer);
     executor.discardChanges();
 }

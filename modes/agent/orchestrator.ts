@@ -9,6 +9,8 @@ import { getAgentModel } from "../../ai";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { runApprovalFlow } from "./approval";
 import { withSpinner } from "../../tui/spinner";
+import { beginSession, endSession, markSessionInterrupted, formatSessionLine } from "../../session";
+import { createSessionTools } from "../../session/session-tools";
 
 export async function runAgentMode() {
     console.log(chalk.bold('\n 🤖 Agent mode \n'))
@@ -23,46 +25,76 @@ export async function runAgentMode() {
     const config = defaultAgentConfig()
     const tracker = new ActionTracker()
     const executor = new ToolExecutor(tracker, config)
-    const tools = createAgentTools(executor)
+
+    // ── Session management ──────────────────────────────────────────────
+    const resumeId = (globalThis as any).__ASTRA_RESUME_SESSION__ as string | undefined;
+    if (resumeId) delete (globalThis as any).__ASTRA_RESUME_SESSION__;
+
+    const { entry: sessionEntry, contextSummary } = beginSession({
+        workspacePath: config.codebasePath,
+        mode: "agent",
+        goal: goal.trim(),
+        resumeSessionId: resumeId,
+    });
+
+    if (contextSummary) {
+        console.log(chalk.dim('\n  ↩ Resuming previous session context.\n'));
+    }
+
+    const tools = {
+        ...createAgentTools(executor),
+        ...createSessionTools(config.codebasePath),
+    }
+
+    const instructions = contextSummary
+        ? [contextSummary, `Workspace root: ${config.codebasePath}`, 'All mutations are staged until approval.'].join('\n')
+        : [`Workspace root: ${config.codebasePath}`, 'All mutations are staged until approval.'].join('\n');
 
     const agent = new ToolLoopAgent({
         model: getAgentModel(),
         stopWhen: stepCountIs(50),
-        instructions: [
-            `Workspace root: ${config.codebasePath}`,
-            'All mutations are staged until approval.'
-        ].join('\n'),
+        instructions,
         tools
     })
 
-    const result = await withSpinner(
-        {
-            message: "Agent is working on your task...",
-            doneMessage: "done",
-            failMessage: "something went wrong",
-        },
-        () =>
-            agent.generate({
-                prompt: goal.trim(),
-                onStepFinish: ({ toolCalls }) => {
-                    for (const tc of toolCalls) {
-                        const preview = JSON.stringify(tc.input).slice(0, 160);
-                        console.log(
-                            chalk.green("  ✔"),
-                            chalk.bold(String(tc.toolName)),
-                            chalk.dim(
-                                preview + (preview.length > 160 ? "..." : ""),
-                            ),
-                        );
-                    }
-                },
-            }),
-    );
+    let result;
+    try {
+        result = await withSpinner(
+            {
+                message: "Agent is working on your task...",
+                doneMessage: "done",
+                failMessage: "something went wrong",
+            },
+            () =>
+                agent.generate({
+                    prompt: goal.trim(),
+                    onStepFinish: ({ toolCalls }) => {
+                        for (const tc of toolCalls) {
+                            const preview = JSON.stringify(tc.input).slice(0, 160);
+                            console.log(
+                                chalk.green("  ✔"),
+                                chalk.bold(String(tc.toolName)),
+                                chalk.dim(
+                                    preview + (preview.length > 160 ? "..." : ""),
+                                ),
+                            );
+                        }
+                    },
+                }),
+        );
+    } catch (error) {
+        markSessionInterrupted(sessionEntry.id);
+        throw error;
+    }
 
     if(result.text.trim()) console.log(renderTerminalMarkdown(result.text))
 
     const ok = await runApprovalFlow(tracker);
-    if(!ok) return executor.discardChanges()
+    if(!ok) {
+        await endSession(sessionEntry.id, tracker, result.text || "(no response)");
+        executor.discardChanges();
+        return;
+    }
 
     await withSpinner(
         {
@@ -85,5 +117,6 @@ export async function runAgentMode() {
         },
     );
 
+    await endSession(sessionEntry.id, tracker, result.text || "(no response)");
     executor.discardChanges()
 }

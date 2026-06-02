@@ -1,7 +1,8 @@
-import {select, isCancel, spinner} from "@clack/prompts"
+import {select, isCancel, spinner, confirm} from "@clack/prompts"
 import chalk from "chalk"
 import figlet from "figlet"
 import { runCliMode } from "../modes/cli"
+import { getResumableSession, formatSessionLine } from "../session";
 
 const BANNER_FONT = "ANSI Shadow"
 const FACE = chalk.hex('#ffd000')
@@ -39,6 +40,26 @@ export async function runWakeup() {
     while (true) {
         console.clear();
         printBanner(ascii);
+
+        // Check for resumable session
+        const recent = getResumableSession(process.cwd());
+        if (recent && recent.status === "interrupted") {
+            console.log(
+                chalk.yellow(`  ⏸ Previous session was interrupted: ${recent.lastGoal.slice(0, 60)}`)
+            );
+            console.log(chalk.dim(`     ${formatSessionLine(recent)}`));
+            console.log();
+            const resume = await confirm({
+                message: "Resume previous session?",
+                initialValue: true,
+            });
+            if (!isCancel(resume) && resume) {
+                (globalThis as any).__ASTRA_RESUME_SESSION__ = recent.id;
+                console.log(chalk.dim("Starting CLI mode...."));
+                await runCliMode();
+                continue;
+            }
+        }
 
         const mode = await select({
             message: "Which mode do you want to proceed with?",
