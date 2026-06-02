@@ -34,6 +34,10 @@ export class ActionTracker{
         )
     }
 
+    getPendingMutationsForPath(path: string): ActionLog[] {
+        return this.getPendingMutations().filter((a) => a.path === path)
+    }
+
     updateStatus(id: string, status: ActionStatus, userApproved?: boolean): void {
         const a = this.actions.find((x)=>x.id===id)
         if(!a) return

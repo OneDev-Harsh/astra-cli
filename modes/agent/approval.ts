@@ -11,6 +11,11 @@ interface ReviewGroup{
     patch:string | null
 }
 
+interface ApprovalFlowOptions {
+    paths?: string[];
+    skipBatchPrompt?: boolean;
+}
+
 function groupPending(pending: ActionLog[]): ReviewGroup[] {
     const byPath = new Map<string, ActionLog[]>();
     const shells: ActionLog[] = [];
@@ -75,8 +80,14 @@ function groupPending(pending: ActionLog[]): ReviewGroup[] {
  * @param tracker ActionTracker with pending mutations
  * @returns true if user approved any changes, false otherwise
  */
-export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
-    const pending = tracker.getPendingMutations()
+export async function runApprovalFlow(
+    tracker: ActionTracker,
+    options: ApprovalFlowOptions = {},
+):Promise<boolean>{
+    const pathSet = options.paths ? new Set(options.paths) : null
+    const pending = pathSet
+        ? tracker.getPendingMutations().filter((a) => pathSet.has(a.path))
+        : tracker.getPendingMutations()
     
     // No changes to review
     if(pending.length === 0){
@@ -84,31 +95,33 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
         return false  // ✓ Correct: nothing to approve
     }
 
-    // Ask user how to proceed
-    const choice = await select({
-        message: "Apply staged changes?",
-        options: [
-            {value: "all", label: "Approve and apply all"},
-            {value: "select", label: "Review one by one"},
-            {value: "cancel", label: "Cancel"},
-        ]
-    })
+    if(!options.skipBatchPrompt){
+        // Ask user how to proceed
+        const choice = await select({
+            message: "Apply staged changes?",
+            options: [
+                {value: "all", label: "Approve and apply all"},
+                {value: "select", label: "Review one by one"},
+                {value: "cancel", label: "Cancel"},
+            ]
+        })
 
-    // User cancelled
-    if(isCancel(choice) || choice === "cancel"){
-        // Mark all as rejected
-        for(const a of pending){
-            tracker.updateStatus(a.id, "rejected", false)
+        // User cancelled
+        if(isCancel(choice) || choice === "cancel"){
+            // Mark all as rejected
+            for(const a of pending){
+                tracker.updateStatus(a.id, "rejected", false)
+            }
+            return false  // ✓ Correct: user rejected all
         }
-        return false  // ✓ Correct: user rejected all
-    }
 
-    // User selected "Approve all" - approve everything and return immediately
-    if(choice === "all"){
-        for(const a of pending){
-            tracker.updateStatus(a.id, "approved", true)
+        // User selected "Approve all" - approve everything and return immediately
+        if(choice === "all"){
+            for(const a of pending){
+                tracker.updateStatus(a.id, "approved", true)
+            }
+            return true  // ✓ IMPORTANT: return immediately without asking about each change
         }
-        return true  // ✓ IMPORTANT: return immediately without asking about each change
     }
 
     // User selected "Review one by one"
@@ -165,5 +178,7 @@ export async function runApprovalFlow(tracker: ActionTracker):Promise<boolean>{
 
     // ✓ Return true only if user approved ANY changes
     // If user rejected all, this returns false (nothing gets applied)
-    return tracker.getActions().some((a) => a.status === "approved")
+    return pending.some((a) =>
+        tracker.getActions().some((x) => x.id === a.id && x.status === "approved"),
+    )
 }

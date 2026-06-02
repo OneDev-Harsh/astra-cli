@@ -2,7 +2,11 @@ import {tool} from 'ai'
 import {z} from 'zod'
 import type { ToolExecutor } from './tool-executor'
 
-export function createAgentTools(executor: ToolExecutor){
+interface AgentToolHooks {
+    afterCreateFile?: (path: string) => Promise<string | void>;
+}
+
+export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks = {}){
     return {
 
         read_file: tool({
@@ -20,7 +24,11 @@ export function createAgentTools(executor: ToolExecutor){
                 path: z.string(),
                 content: z.string(),
             }),
-            execute: async ({ path: p, content }) => executor.createFile(p, content),
+            execute: async ({ path: p, content }) => {
+                const staged = executor.createFile(p, content)
+                const followUp = await hooks.afterCreateFile?.(executor.normalizePath(p))
+                return followUp ?? staged
+            },
         }),
 
         modify_file: tool({

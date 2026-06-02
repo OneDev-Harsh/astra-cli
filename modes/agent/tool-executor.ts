@@ -59,6 +59,7 @@ export class ToolExecutor{
 
     private overlay = new Map<string, string>()
     private deleted = new Set<string>()
+    private appliedActionIds = new Set<string>()
     private readonly norm = (rel: string) => path.posix.normalize(rel.split(path.sep).join("/")).replace(/^\.\//,"");
 
     constructor (
@@ -104,6 +105,10 @@ export class ToolExecutor{
         const abs = this.resolveSafe(rel)
         if(!fs.existsSync(abs) || !fs.statSync(abs).isFile()) return undefined
         return fs.readFileSync(abs, 'utf8')
+    }
+
+    normalizePath(rel: string): string {
+        return this.norm(rel)
     }
 
     readFile(rel: string): string {
@@ -474,9 +479,16 @@ export class ToolExecutor{
             .getPendingMutations()
     }
 
+    discardStagedPath(rel: string): void {
+        const key = this.norm(rel)
+        this.overlay.delete(key)
+        this.deleted.delete(key)
+    }
+
     discardChanges(): string {
         this.overlay.clear()
         this.deleted.clear()
+        this.appliedActionIds.clear()
         return "Discarded all staged changes"
     }
 
@@ -913,10 +925,14 @@ export class ToolExecutor{
         const all = [...this.tracker.getActions()];
 
         for (const a of all.filter(
-        (x) => x.type === "folder_create" && x.status === "approved",
+        (x) =>
+            x.type === "folder_create" &&
+            x.status === "approved" &&
+            !this.appliedActionIds.has(x.id),
         )) {
         try {
             fs.mkdirSync(this.resolveSafe(a.path), { recursive: true });
+            this.appliedActionIds.add(a.id);
         } catch (e) {
             errors.push(String(e));
         }
@@ -928,14 +944,22 @@ export class ToolExecutor{
             (a.type === "file_create" ||
                 a.type === "file_modify" ||
                 a.type === "file_delete") &&
-            a.status === "approved",
+            a.status === "approved" &&
+            !this.appliedActionIds.has(a.id),
         )
         .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-        const lastByPath = new Map<string, ActionLog>();
-        for (const a of fileOps) lastByPath.set(this.norm(a.path), a);
+        const opsByPath = new Map<string, ActionLog[]>();
+        for (const a of fileOps) {
+        const key = this.norm(a.path);
+        const existing = opsByPath.get(key) ?? [];
+        existing.push(a);
+        opsByPath.set(key, existing);
+        }
 
-        for (const [p, a] of lastByPath) {
+        for (const [p, ops] of opsByPath) {
+        const a = ops[ops.length - 1];
+        if (!a) continue;
         try {
             if (a.type === "file_delete")
             fs.rmSync(this.resolveSafe(p), { force: true });
@@ -944,13 +968,17 @@ export class ToolExecutor{
             fs.mkdirSync(path.dirname(target), { recursive: true });
             fs.writeFileSync(target, a.details.after ?? "", "utf8");
             }
+            for (const op of ops) this.appliedActionIds.add(op.id);
         } catch (e) {
             errors.push(String(e));
         }
         }
 
         for (const a of all.filter(
-        (x) => x.type === "tool_execute" && x.status === "approved",
+        (x) =>
+            x.type === "tool_execute" &&
+            x.status === "approved" &&
+            !this.appliedActionIds.has(x.id),
         )) {
         const cmd = a.details.command;
         if (!cmd) continue;
@@ -962,6 +990,8 @@ export class ToolExecutor{
         });
         if (r.status && r.status !== 0)
             errors.push(`shell exit ${r.status}: ${cmd}`);
+        else
+            this.appliedActionIds.add(a.id);
         }
 
         return { errors };

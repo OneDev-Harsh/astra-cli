@@ -13,15 +13,11 @@ import { createWebTools } from "../plan/web-tools";
 import { withSpinner } from "../../tui/spinner";
 import { beginSession, endSession, markSessionInterrupted } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
+import { promptToRetryAiCall } from "../../ai/retry-prompt";
 
-/**
- * Read-only subset of agent tools safe for ask mode.
- * Excludes all mutation tools (create/modify/delete/shell/staging).
- */
 function createReadOnlyTools(executor: ToolExecutor) {
     const all = createAgentTools(executor);
     const {
-        // strip every mutating tool
         create_file: _cf,
         modify_file: _mf,
         delete_file: _df,
@@ -32,16 +28,10 @@ function createReadOnlyTools(executor: ToolExecutor) {
         run_command: _rc,
         run_background_command: _rbc,
         execute_shell: _es,
-        apply_changes: _ac,
-        discard_changes: _dc,
-        show_pending_changes: _spc,
         run_tests: _rt,
         run_test_file: _rtf,
         lint_project: _lp,
         format_project: _fp,
-        create_plan: _cp,
-        get_plan: _gp,
-        // keep everything else
         ...readOnly
     } = all;
     return readOnly;
@@ -52,7 +42,7 @@ function asMd(questions: string, answer: string): string {
 }
 
 export async function runAskMode() {
-    console.log(chalk.bold("\n❔ Ask Mode\n"));
+    console.log(chalk.bold("\nAsk Mode\n"));
 
     const questions = await text({
         message: "What do you want to ask?",
@@ -60,7 +50,6 @@ export async function runAskMode() {
     if (isCancel(questions) || !questions.trim()) return;
 
     const config = defaultAgentConfig();
-    // Agent runs fully read-only; file creation is only enabled for the save step below
     config.tools.allowShellExecution = false;
     config.tools.allowFileModification = false;
     config.tools.allowFolderCreation = false;
@@ -69,7 +58,6 @@ export async function runAskMode() {
     const tracker = new ActionTracker();
     const executor = new ToolExecutor(tracker, config);
 
-    // ── Session management ──────────────────────────────────────────────
     const { entry: sessionEntry } = beginSession({
         workspacePath: config.codebasePath,
         mode: "ask",
@@ -87,31 +75,45 @@ export async function runAskMode() {
     });
 
     let result;
-    try {
-        result = await withSpinner(
-            {
-                message: "Thinking...",
-                doneMessage: "here's the answer",
-                failMessage: "couldn't get an answer",
-            },
-            () =>
-                agent.generate({
-                    prompt: questions.trim(),
-                    onStepFinish: ({ toolCalls }) => {
-                        for (const tc of toolCalls) {
-                            const preview = JSON.stringify(tc.input).slice(0, 160);
-                            console.log(
-                                chalk.cyan("  ·"),
-                                chalk.bold(String(tc.toolName)),
-                                chalk.dim(preview + (preview.length > 160 ? "..." : "")),
-                            );
-                        }
-                    },
-                }),
-        );
-    } catch (error) {
-        markSessionInterrupted(sessionEntry.id);
-        throw error;
+    while (true) {
+        try {
+            result = await withSpinner(
+                {
+                    message: "Thinking...",
+                    doneMessage: "here's the answer",
+                    failMessage: "couldn't get an answer",
+                },
+                () =>
+                    agent.generate({
+                        prompt: questions.trim(),
+                        onStepFinish: ({ toolCalls }) => {
+                            for (const tc of toolCalls) {
+                                const preview = JSON.stringify(tc.input).slice(0, 160);
+                                console.log(
+                                    chalk.cyan("  -"),
+                                    chalk.bold(String(tc.toolName)),
+                                    chalk.dim(preview + (preview.length > 160 ? "..." : "")),
+                                );
+                            }
+                        },
+                    }),
+            );
+            break;
+        } catch (error) {
+            const retry = await promptToRetryAiCall(
+                "The answer request hit a provider error.",
+                error,
+            );
+            if (retry) continue;
+            markSessionInterrupted(sessionEntry.id);
+            await endSession(
+                sessionEntry.id,
+                tracker,
+                "Stopped after AI provider error.",
+            );
+            executor.discardChanges();
+            return;
+        }
     }
 
     const answer = result.text.trim() || "(agent returned empty response)";
@@ -146,7 +148,6 @@ export async function runAskMode() {
         return;
     }
 
-    // Enable file creation only for the explicit save step
     config.tools.allowFileCreation = true;
     executor.createFile(filename, asMd(questions, answer));
     config.tools.allowFileCreation = false;
@@ -159,7 +160,7 @@ export async function runAskMode() {
 
     await withSpinner(
         {
-            message: "Saving response…",
+            message: "Saving response...",
             doneMessage: "response saved",
             failMessage: "save failed",
         },
