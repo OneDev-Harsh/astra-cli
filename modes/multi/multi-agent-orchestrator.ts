@@ -770,6 +770,10 @@ export class MultiAgentOrchestrator {
     return this.sharedTracker;
   }
 
+  getAllExecutors(): Map<string, ToolExecutor> {
+      return this.executors;
+  }
+
   /**
    * Get orchestrator state
    */
