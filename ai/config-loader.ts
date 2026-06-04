@@ -98,3 +98,35 @@ export function saveConfig(entries: Record<string, string>): void {
   // Also inject into current process so the user doesn't have to restart
   ensureConfigLoaded();
 }
+
+// ─── Retry Configuration ───────────────────────────────────────────────────
+
+/**
+ * Get retry configuration from environment
+ */
+export function getRetryConfig(): {
+    enabled: boolean;
+    maxRetries: number;
+    showProgress: boolean;
+} {
+    return {
+        enabled: getEnv("ASTRA_AGENT_RETRY_ENABLED") !== "false",
+        maxRetries: parseInt(getEnv("ASTRA_AGENT_RETRY_MAX") || "3", 10),
+        showProgress: getEnv("ASTRA_AGENT_RETRY_PROGRESS") !== "false",
+    };
+}
+
+/**
+ * Get multi-agent retry configuration
+ */
+export function getMultiRetryConfig(): {
+    enabled: boolean;
+    maxRetries: number;
+    backoffMultiplier: number;
+} {
+    return {
+        enabled: getEnv("ASTRA_MULTI_RETRY_ENABLED") !== "false",
+        maxRetries: parseInt(getEnv("ASTRA_MULTI_RETRY_MAX") || "2", 10),
+        backoffMultiplier: parseInt(getEnv("ASTRA_MULTI_RETRY_BACKOFF") || "2", 10),
+    };
+}

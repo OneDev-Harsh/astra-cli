@@ -17,7 +17,8 @@ import { createAgentTools } from "../agent/agent-tools";
 import { ToolLoopAgent, stepCountIs } from "ai";
 import { getAgentModel } from "../../ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { getEnv } from "../../ai/config-loader";
+import { getEnv, getMultiRetryConfig } from "../../ai/config-loader";
+import { withRetry } from "../../core/retry";
 
 /**
  * Logger utility with consistent formatting
@@ -365,23 +366,61 @@ export class MultiAgentOrchestrator {
     const executedTools: string[] = [];
     const messagesSent: AgentMessage[] = [];
 
+    // Determine retry configuration from workflow strategy and environment
+    const multiRetryConfig = getMultiRetryConfig();
+    const strategyMaxRetries = this.workflow.strategy.config.retryOnFailure
+      ? (this.workflow.strategy.config.maxRetries ?? 1)
+      : 0;
+    const effectiveMaxRetries = multiRetryConfig.enabled
+      ? Math.max(strategyMaxRetries, multiRetryConfig.maxRetries)
+      : strategyMaxRetries;
+
     try {
       const prompt = this._buildAgentPrompt(agentConfig);
       orchestrationLogger.info(agentConfig.id, "Generating model response");
 
-      const result = await agent.generate({
-        prompt,
-        onStepFinish: ({ toolCalls }) => {
-          for (const tc of toolCalls) {
-            const toolName = String(tc.toolName);
-            if (!executedTools.includes(toolName)) {
-              executedTools.push(toolName);
-              orchestrationLogger.info(agentConfig.id, `Executed tool: ${toolName}`);
+      // Wrap the agent.generate call with automatic retry logic
+      const { result, stats } = await withRetry(
+        () => agent.generate({
+          prompt,
+          onStepFinish: ({ toolCalls }) => {
+            for (const tc of toolCalls) {
+              const toolName = String(tc.toolName);
+              if (!executedTools.includes(toolName)) {
+                executedTools.push(toolName);
+                orchestrationLogger.info(agentConfig.id, `Executed tool: ${toolName}`);
+              }
+              agentInstance.context.metadata.currentStep++;
             }
-            agentInstance.context.metadata.currentStep++;
-          }
+          },
+        }),
+        {
+          maxRetries: effectiveMaxRetries,
+          baseDelayMs: 1000,
+          maxDelayMs: 30000,
+          backoffMultiplier: multiRetryConfig.backoffMultiplier,
+          jitter: true,
+          maxJitterMs: 1000,
+          onRetry: (attempt, error, delayMs) => {
+            orchestrationLogger.info(
+              agentConfig.id,
+              `Retry ${attempt}/${effectiveMaxRetries} after ${error.category} error, waiting ${Math.round(delayMs / 1000)}s`,
+            );
+            this._emitEvent({
+              type: "agent:retry",
+              timestamp: new Date(),
+              agentId: agentConfig.id,
+              payload: { attempt, error: error.category, delayMs },
+            });
+          },
+          onExhausted: (error, totalAttempts) => {
+            orchestrationLogger.error(
+              agentConfig.id,
+              `All ${totalAttempts} attempts failed (${error.category})`,
+            );
+          },
         },
-      });
+      );
 
       const durationMs = Date.now() - startMs;
       const executionResult: AgentExecutionResult = {
@@ -393,7 +432,7 @@ export class MultiAgentOrchestrator {
         messagesSent,
         context: agentInstance.context,
         durationMs,
-        attemptNumber: 1 + (agentInstance.context.metadata.retryCount ?? 0),
+        attemptNumber: stats.totalAttempts,
       };
 
       this.poolManager.updateCompletion(agentConfig.id, 100);
@@ -409,6 +448,7 @@ export class MultiAgentOrchestrator {
       orchestrationLogger.info(agentConfig.id, "Execution completed", {
         tools: executedTools.length,
         durationMs,
+        attempts: stats.totalAttempts,
       });
 
       return executionResult;
@@ -424,7 +464,7 @@ export class MultiAgentOrchestrator {
 
       orchestrationLogger.error(
         agentConfig.id,
-        "Execution failed",
+        "Execution failed (all retries exhausted)",
         error instanceof Error ? error : new Error(String(error)),
       );
 
@@ -593,11 +633,46 @@ export class MultiAgentOrchestrator {
       }
 
       if (batch.length === 0) {
-        // Nothing ready and nothing running — error!
+        // Nothing ready and nothing running
         if (pending.size > 0) {
+          // ✅ FIXED: Handle deadlock by skipping blocked agents
           const blocked = Array.from(pending);
-          orchestrationLogger.error("ORCHESTRATOR", `Deadlock: blocked agents: ${blocked.join(", ")}`);
-          break;
+          orchestrationLogger.error(
+            "ORCHESTRATOR",
+            `Deadlock: marking ${blocked.length} blocked agents as skipped`,
+          );
+
+          for (const blockedId of blocked) {
+            const blockedAgent = this.workflow.agents.find((a) => a.id === blockedId);
+            if (!blockedAgent) continue;
+
+            this.poolManager.markAgentSkipped(blockedId);
+            this.state.sharedContext.metadata.failedTasks.push(
+              `${blockedId}: skipped (dependencies failed)`,
+            );
+
+            const emptyResult: AgentExecutionResult = {
+              agentId: blockedId,
+              success: false,
+              output: "Agent skipped due to failed dependencies",
+              executedTools: [],
+              messagesReceived: [],
+              messagesSent: [],
+              context: this.poolManager.getAgent(blockedId)!.context,
+              error: new Error("Dependencies failed"),
+              durationMs: 0,
+              attemptNumber: 1,
+            };
+            this.state.timeline.push(emptyResult);
+
+            this._emitEvent({
+              type: "agent:failed",
+              timestamp: new Date(),
+              agentId: blockedId,
+              payload: { reason: "dependencies_failed" },
+            });
+          }
+          pending.clear();
         }
         break;
       }
@@ -622,8 +697,9 @@ export class MultiAgentOrchestrator {
         const agent = this.workflow.agents.find((a) => a.id === result.agentId);
         if (result.success && agent) {
           this._updateSharedContext(agent, result);
-        } else {
-          this._handleAgentFailure(agent!, result);
+        } else if (agent) {
+          // ✅ FIXED: Pass result to failure handler
+          await this._handleAgentFailure(agent, result);
         }
       }
     }
@@ -643,11 +719,17 @@ export class MultiAgentOrchestrator {
     this.state.sharedContext.metadata.completedTasks.push(`${agentConfig.id}: ${agentConfig.description}`);
   }
 
-  private _handleAgentFailure(agentConfig: AgentConfig, result: AgentExecutionResult): void {
+  private async _handleAgentFailure(
+    agentConfig: AgentConfig,
+    result: AgentExecutionResult,
+  ): Promise<void> {
+    const failureMode = this.workflow.strategy.config.failureMode ?? "fail-fast";
+    const maxRetries = this.workflow.strategy.config.maxRetries ?? 1;
     const shouldRetry =
       this.workflow.strategy.config.retryOnFailure &&
-      result.context.metadata.retryCount < (this.workflow.strategy.config.maxRetries ?? 1);
+      result.context.metadata.retryCount < maxRetries;
 
+    // ✅ FIXED: Proper retry logic
     if (shouldRetry) {
       this.poolManager.markAgentRetrying(agentConfig.id);
       this._emitEvent({
@@ -656,18 +738,71 @@ export class MultiAgentOrchestrator {
         agentId: agentConfig.id,
         payload: { attempt: 1 + result.context.metadata.retryCount },
       });
+
       orchestrationLogger.info(
         agentConfig.id,
-        `Retry ${1 + result.context.metadata.retryCount}/${this.workflow.strategy.config.maxRetries}`,
+        `Retry ${1 + result.context.metadata.retryCount}/${maxRetries}`,
       );
-    } else {
-      const failureMode = this.workflow.strategy.config.failureMode ?? "fail-fast";
-      this.state.sharedContext.metadata.failedTasks.push(`${agentConfig.id}: ${agentConfig.description}`);
 
-      if (failureMode === "fail-fast") {
-        throw new Error(`Agent ${agentConfig.id} failed and retry exhausted`);
+      // Retry will happen in the main execution loop
+      return;
+    }
+
+    // Agent has failed permanently
+    this.poolManager.markAgentFailed(agentConfig.id);
+    this.state.sharedContext.metadata.failedTasks.push(
+      `${agentConfig.id}: ${agentConfig.description}`,
+    );
+
+    // ✅ FIXED: Cascade skip to dependent agents
+    const dependentIds = this.workflow.agents
+      .filter((a) => a.dependsOn?.includes(agentConfig.id))
+      .map((a) => a.id);
+
+    for (const depId of dependentIds) {
+      const depAgent = this.poolManager.getAgent(depId);
+      if (depAgent && (depAgent.status === "pending")) {
+        this.poolManager.markAgentSkipped(depId);
+        this.state.sharedContext.metadata.failedTasks.push(
+          `${depId}: skipped (dependency ${agentConfig.id} failed)`,
+        );
+
+        const skipResult: AgentExecutionResult = {
+          agentId: depId,
+          success: false,
+          output: `Skipped because dependency ${agentConfig.id} failed`,
+          executedTools: [],
+          messagesReceived: [],
+          messagesSent: [],
+          context: depAgent.context,
+          error: new Error(`Dependency ${agentConfig.id} failed`),
+          durationMs: 0,
+          attemptNumber: 1,
+        };
+        this.state.timeline.push(skipResult);
+
+        this._emitEvent({
+          type: "agent:failed",
+          timestamp: new Date(),
+          agentId: depId,
+          payload: { reason: `dependency_${agentConfig.id}_failed` },
+        });
+
+        // Recursively skip agents depending on this one
+        const depAgentConfig = this.workflow.agents.find((a) => a.id === depId);
+        if (depAgentConfig) {
+          await this._handleAgentFailure(depAgentConfig, skipResult);
+        }
       }
     }
+
+    // Handle based on failure mode
+    if (failureMode === "fail-fast") {
+      throw new Error(
+        `Agent ${agentConfig.id} failed: ${result.error?.message || "unknown error"}`,
+      );
+    }
+    // "continue" and "fail-at-end" just mark as failed and continue
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────

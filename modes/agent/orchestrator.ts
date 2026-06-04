@@ -5,7 +5,7 @@ import { ActionTracker } from "./action-tracker";
 import { ToolExecutor } from "./tool-executor";
 import { createAgentTools } from "./agent-tools";
 import { stepCountIs, ToolLoopAgent } from "ai";
-import { getAgentModel } from "../../ai";
+import { getAgentModel, withAiRetry, getRetryConfig } from "../../ai";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { runApprovalFlow } from "./approval";
 import { withSpinner } from "../../tui/spinner";
@@ -96,43 +96,97 @@ export async function runAgentMode() {
     });
 
     let result;
-    while (true) {
-        try {
-            result = await withSpinner(
-                {
-                    message: "Agent is working on your task...",
-                    doneMessage: "done",
-                    failMessage: "something went wrong",
+    const retryConfig = getRetryConfig();
+
+    try {
+        result = await withAiRetry(
+            () =>
+                withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    () =>
+                        agent.generate({
+                            prompt: goal.trim(),
+                            onStepFinish: ({ toolCalls }) => {
+                                for (const tc of toolCalls) {
+                                    const preview = JSON.stringify(tc.input).slice(0, 160);
+                                    console.log(
+                                        chalk.green("  *"),
+                                        chalk.bold(String(tc.toolName)),
+                                        chalk.dim(
+                                            preview + (preview.length > 160 ? "..." : ""),
+                                        ),
+                                    );
+                                }
+                            },
+                        }),
+                ),
+            "The agent hit a provider error.",
+            {
+                enabled: retryConfig.enabled,
+                retryConfig: {
+                    maxRetries: retryConfig.maxRetries,
+                    baseDelayMs: 1000,
+                    maxDelayMs: 30000,
+                    backoffMultiplier: 2,
+                    jitter: true,
+                    maxJitterMs: 1000,
                 },
-                () =>
-                    agent.generate({
-                        prompt: goal.trim(),
-                        onStepFinish: ({ toolCalls }) => {
-                            for (const tc of toolCalls) {
-                                const preview = JSON.stringify(tc.input).slice(0, 160);
-                                console.log(
-                                    chalk.green("  *"),
-                                    chalk.bold(String(tc.toolName)),
-                                    chalk.dim(
-                                        preview + (preview.length > 160 ? "..." : ""),
-                                    ),
-                                );
-                            }
-                        },
-                    }),
-            );
-            break;
-        } catch (error) {
-            const retry = await promptToRetryAiCall(
-                "The agent hit a provider error.",
-                error,
-            );
-            if (retry) continue;
+                showProgress: retryConfig.showProgress,
+                askBeforeRetry: false,
+            },
+        );
+    } catch (error) {
+        // All automatic retries exhausted — offer manual retry as last resort
+        const manualRetry = await promptToRetryAiCall(
+            "Automatic retries exhausted. Would you like to try once more?",
+            error,
+        );
+
+        if (manualRetry) {
+            try {
+                result = await withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    () =>
+                        agent.generate({
+                            prompt: goal.trim(),
+                            onStepFinish: ({ toolCalls }) => {
+                                for (const tc of toolCalls) {
+                                    const preview = JSON.stringify(tc.input).slice(0, 160);
+                                    console.log(
+                                        chalk.green("  *"),
+                                        chalk.bold(String(tc.toolName)),
+                                        chalk.dim(
+                                            preview + (preview.length > 160 ? "..." : ""),
+                                        ),
+                                    );
+                                }
+                            },
+                        }),
+                );
+            } catch (finalError) {
+                markSessionInterrupted(sessionEntry.id);
+                await endSession(
+                    sessionEntry.id,
+                    tracker,
+                    "Stopped after final manual retry failed.",
+                );
+                executor.discardChanges();
+                return;
+            }
+        } else {
             markSessionInterrupted(sessionEntry.id);
             await endSession(
                 sessionEntry.id,
                 tracker,
-                "Stopped after AI provider error.",
+                "Stopped after AI provider error (all retries exhausted).",
             );
             executor.discardChanges();
             return;
