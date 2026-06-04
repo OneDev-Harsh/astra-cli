@@ -4,14 +4,13 @@ import { WorkflowBuilder, WorkflowTemplates } from "./workflow-builder";
 import { withSpinner } from "../../tui/spinner";
 
 /**
- * Example: Simple sequential code review workflow
+ * Example: Code review with inline failure handling
  */
 export async function exampleCodeReviewWorkflow(): Promise<void> {
-  console.log(chalk.bold("\n🤝 Multi-Agent Code Review\n"));
+  console.log(chalk.bold("\n🤝 Code Review Workflow\n"));
 
-  // Build a custom workflow
   const workflow = new WorkflowBuilder(
-    "review_workflow_001",
+    "review_001",
     "Review the authentication module for security vulnerabilities",
   )
     .addResearcher(
@@ -31,62 +30,52 @@ export async function exampleCodeReviewWorkflow(): Promise<void> {
     )
     .withSequentialStrategy()
     .withRetryOnFailure(1)
+    .withExpectedOutput("Security audit report with fixes applied")
     .build();
 
-  // Validate before execution
-  const validator = new WorkflowBuilder(workflow.id, workflow.goal);
-  for (const agent of workflow.agents) {
-    validator.addAgent(agent);
-  }
-  validator.getWorkflow().strategy = workflow.strategy;
-  const validation = validator.validate();
-
+  const validation = new WorkflowBuilder(workflow.id, workflow.goal).validate();
   if (!validation.isValid) {
-    console.log(chalk.red("❌ Workflow validation failed:"));
-    for (const error of validation.errors) {
-      console.log(chalk.red(`  • ${error}`));
-    }
+    console.log(chalk.red("❌ Validation failed:"));
+    validation.errors.forEach((e) => console.log(chalk.red(`  • ${e}`)));
     return;
   }
 
-  // Execute the workflow
   const orchestrator = new MultiAgentOrchestrator(workflow);
+
+  // Listen to events
+  const unsubscribe = orchestrator.onEvent((event) => {
+    if (event.type === "agent:complete") {
+      console.log(chalk.dim(`  ✓ ${event.agentId} completed`));
+    } else if (event.type === "agent:failed") {
+      console.log(chalk.red(`  ✗ ${event.agentId} failed`));
+    }
+  });
 
   await withSpinner(
     {
-      message: "Orchestrating multi-agent workflow...",
+      message: "Orchestrating review workflow...",
       doneMessage: "workflow completed",
       failMessage: "workflow failed",
     },
     () => orchestrator.execute(),
   );
 
-  // Display results
-  console.log(chalk.bold("\n📊 Execution Summary\n"));
-  const summary = orchestrator.getSummary();
-  console.log(`Status: ${chalk.green(summary.status)}`);
-  console.log(`Strategy: ${summary.strategy}`);
-  console.log(`Duration: ${summary.duration}ms`);
-  console.log(`Total Agents: ${summary.totalAgents}`);
-  console.log(`Completed Tasks: ${chalk.green(String(summary.completedTasks))}`);
-  console.log(`Failed Tasks: ${chalk.red(String(summary.failedTasks))}`);
+  unsubscribe();
 
-  console.log(chalk.bold("\n🔍 Agent Execution Timeline\n"));
-  for (const exec of summary.executionResults) {
-    const status = exec.success ? chalk.green("✓") : chalk.red("✗");
-    console.log(
-      `${status} ${chalk.bold(exec.agentId)} (${exec.role}) - ${exec.steps} steps`,
-    );
-  }
+  const summary = orchestrator.getSummary();
+  console.log(chalk.bold("\n📊 Results\n"));
+  console.log(`Status: ${chalk.green(summary.status)}`);
+  console.log(`Duration: ${summary.duration}ms`);
+  console.log(`Completed: ${summary.completedTasks}`);
+  console.log(`Failed: ${summary.failedTasks}`);
 }
 
 /**
- * Example: Parallel feature development workflow
+ * Example: Parallel feature development with multiple models
  */
 export async function exampleParallelDevelopment(): Promise<void> {
   console.log(chalk.bold("\n⚡ Parallel Feature Development\n"));
 
-  // Use predefined template
   const workflow = WorkflowTemplates.featureDevelopmentWorkflow(
     "feature_dev_001",
     "Implement user authentication with OAuth2 support",
@@ -105,16 +94,15 @@ export async function exampleParallelDevelopment(): Promise<void> {
 
   console.log(chalk.bold("\n✅ Feature Development Complete\n"));
   const timeline = orchestrator.getTimeline();
+
   for (const result of timeline) {
     if (result.success) {
-      console.log(chalk.green(`✓ ${result.agentId} completed successfully`));
+      console.log(chalk.green(`✓ ${result.agentId} (${result.durationMs}ms)`));
       if (result.output) {
-        console.log(
-          chalk.dim(`  Output preview: ${result.output.slice(0, 100)}...`),
-        );
+        console.log(chalk.dim(`  Output: ${result.output.slice(0, 80)}...`));
       }
     } else {
-      console.log(chalk.red(`✗ ${result.agentId} failed`));
+      console.log(chalk.red(`✗ ${result.agentId}`));
       if (result.error) {
         console.log(chalk.dim(`  Error: ${result.error.message}`));
       }
@@ -147,7 +135,7 @@ export async function exampleCollaborativeBugFix(): Promise<void> {
       "Bug Fixer",
       "Implements the fix based on findings",
     )
-    .withCollaborativeStrategy(60000)
+    .withCollaborativeStrategy(60_000)
     .withExpectedOutput("Fixed login endpoint with regression tests")
     .build();
 
@@ -162,167 +150,154 @@ export async function exampleCollaborativeBugFix(): Promise<void> {
     () => orchestrator.execute(),
   );
 
-  // Display conversation history
   const messages = orchestrator.getMessageHistory();
   if (messages.length > 0) {
-    console.log(chalk.bold("\n💬 Agent Communication History\n"));
+    console.log(chalk.bold("\n💬 Agent Communication\n"));
     for (const msg of messages.slice(-5)) {
-      // Show last 5 messages
-      console.log(
-        `${chalk.cyan(msg.fromAgentId)} → ${msg.toAgentId || "all"}: ${msg.type}`,
-      );
+      console.log(`${chalk.cyan(msg.fromAgentId)} → ${msg.toAgentId || "all"}: ${msg.type}`);
       console.log(chalk.dim(`  ${msg.content.slice(0, 80)}...`));
     }
   }
 }
 
 /**
- * Advanced example: Custom multi-stage workflow with per-agent models
+ * Example: Advanced DAG workflow with full-stack development
  */
-export async function exampleAdvancedWorkflow(): Promise<void> {
-  console.log(
-    chalk.bold("\n🚀 Advanced Multi-Stage Development Workflow\n"),
+export async function exampleAdvancedDAGWorkflow(): Promise<void> {
+  console.log(chalk.bold("\n🚀 Full-Stack Development (DAG)\n"));
+
+  const workflow = WorkflowTemplates.fullStackFeatureWorkflow(
+    "fullstack_001",
+    "Build a new user profile management feature with database, API, and UI",
   );
 
-  const workflow = new WorkflowBuilder(
-    "advanced_001",
-    "Implement a new payment processing module with full test coverage",
-  )
-    // Stage 1: Research
-    .addResearcher(
-      "payment_researcher",
-      "Payment Researcher",
-      "Researches payment processing requirements and best practices",
-      // Use a fast, cheap model for research
-      { model: "anthropic/claude-3.5-sonnet" },
-    )
-
-    // Stage 2: Implementation (parallel)
-    .addImplementer(
-      "payment_impl",
-      "Payment Implementation",
-      "Implements payment processing logic",
-    )
-    .addImplementer(
-      "integration_impl",
-      "Integration Implementation",
-      "Integrates with payment gateways",
-    )
-
-    // Stage 3: Validation
-    .addReviewer(
-      "security_reviewer",
-      "Security Reviewer",
-      "Reviews for security vulnerabilities",
-    )
-    .addReviewer(
-      "compliance_reviewer",
-      "Compliance Reviewer",
-      "Ensures PCI compliance",
-    )
-
-    // Configure workflow
-    .withHierarchicalStrategy()
-    .withRetryOnFailure(2)
-    .withExpectedOutput(
-      "Complete payment module with 100% test coverage and security audit",
-    )
-    .build();
-
-  // Validate workflow
-  const validator = new WorkflowBuilder(workflow.id, workflow.goal);
+  console.log(chalk.dim("Dependencies:"));
   for (const agent of workflow.agents) {
-    validator.addAgent(agent);
+    const deps = agent.dependsOn?.join(", ") || "(root)";
+    console.log(chalk.dim(`  ${agent.name} ← ${deps}`));
   }
-  validator.getWorkflow().strategy = workflow.strategy;
-  const validation = validator.validate();
+  console.log();
 
-  if (!validation.isValid) {
-    console.log(chalk.red("Validation errors:"));
-    validation.errors.forEach((e) => console.log(chalk.red(`  • ${e}`)));
-    return;
-  }
-
-  // Execute with detailed monitoring
   const orchestrator = new MultiAgentOrchestrator(workflow);
-  console.log(chalk.blue(`Workflow ID: ${workflow.id}`));
-  console.log(chalk.blue(`Agents: ${workflow.agents.length}`));
-  console.log(chalk.blue(`Strategy: ${workflow.strategy.type}\n`));
+
+  // Log events in real-time
+  orchestrator.onEvent((event) => {
+    if (event.type === "agent:start") {
+      console.log(chalk.cyan(`→ ${event.agentId} starting`));
+    } else if (event.type === "agent:complete") {
+      const duration = event.payload?.duration;
+      console.log(chalk.green(`✓ ${event.agentId} done${duration ? ` (${duration}ms)` : ""}`));
+    }
+  });
 
   await withSpinner(
     {
-      message: "Executing advanced multi-stage workflow...",
+      message: "Executing DAG workflow...",
       doneMessage: "all stages completed",
       failMessage: "workflow encountered errors",
     },
     () => orchestrator.execute(),
   );
 
-  // Detailed results
   const summary = orchestrator.getSummary();
-  console.log(chalk.bold("\n📈 Detailed Execution Report\n"));
+  console.log(chalk.bold("\n📈 Detailed Report\n"));
   console.log(`Total Duration: ${summary.duration}ms`);
-  console.log(`Pool Statistics:`);
-  console.log(`  • Active: ${summary.poolStats.activeAgents}`);
-  console.log(`  • Waiting: ${summary.poolStats.waitingAgents}`);
-  console.log(`  • Failed: ${summary.poolStats.failedAgents}`);
-  console.log(`  • Completion: ${summary.poolStats.completionPercentage}%`);
+  console.log(`Agents: ${summary.totalAgents}`);
+  console.log(`Completed: ${chalk.green(String(summary.completedTasks))}`);
+  console.log(`Failed: ${chalk.red(String(summary.failedTasks))}`);
+  console.log();
 
-  console.log(chalk.bold("\n🎯 Agent Results\n"));
   for (const result of summary.executionResults) {
     const icon = result.success ? chalk.green("✓") : chalk.red("✗");
-    console.log(
-      `${icon} ${chalk.bold(result.agentId)} (${result.role}) - ${result.steps} steps`,
-    );
+    console.log(`${icon} ${chalk.bold(result.agentId)} (${result.role})`);
+    console.log(`   Duration: ${result.durationMs}ms, Steps: ${result.steps}`);
   }
 }
 
 /**
- * Example: Multi-model orchestration — each agent uses a different model
+ * Example: Security audit with parallel reviewers
+ */
+export async function exampleSecurityAudit(): Promise<void> {
+  console.log(chalk.bold("\n🔒 Security Audit (Parallel)\n"));
+
+  const workflow = WorkflowTemplates.securityAuditWorkflow(
+    "audit_001",
+    "Full security audit of the payment processing module",
+  );
+
+  const orchestrator = new MultiAgentOrchestrator(workflow);
+
+  // Track which agents are running
+  const running = new Set<string>();
+  orchestrator.onEvent((event) => {
+    if (event.type === "agent:start" && event.agentId) {
+      running.add(event.agentId);
+      console.log(chalk.cyan(`→ [${running.size}] ${event.agentId}`));
+    } else if (event.type === "agent:complete" && event.agentId) {
+      running.delete(event.agentId);
+      console.log(chalk.green(`✓ [${running.size}] ${event.agentId}`));
+    }
+  });
+
+  await withSpinner(
+    {
+      message: "Running security audit...",
+      doneMessage: "audit completed",
+      failMessage: "audit failed",
+    },
+    () => orchestrator.execute(),
+  );
+
+  const summary = orchestrator.getSummary();
+  console.log(chalk.bold("\n🔍 Audit Summary\n"));
+  console.log(`Status: ${summary.status}`);
+  console.log(`Duration: ${summary.duration}ms`);
+
+  console.log(chalk.bold("\n📋 Agent Reports\n"));
+  const timeline = orchestrator.getTimeline();
+  for (const result of timeline) {
+    if (result.success) {
+      console.log(chalk.green(`✓ ${result.agentId}`));
+      console.log(chalk.dim(`  ${result.output.slice(0, 150)}...`));
+    }
+  }
+}
+
+/**
+ * Example: Multi-model orchestration — different models for different agents
  */
 export async function exampleMultiModelOrchestration(): Promise<void> {
   console.log(chalk.bold("\n🧠 Multi-Model Orchestration\n"));
-  console.log(
-    chalk.dim(
-      "This example demonstrates using different models for different agent roles.\n",
-    ),
-  );
 
   const workflow = new WorkflowBuilder(
     "multimodel_001",
-    "Refactor the API layer to use a clean architecture pattern",
+    "Refactor API layer to clean architecture",
   )
-    // Use a strong model for architecture decisions
     .addCoordinator(
       "architect",
       "Software Architect",
-      "Designs the clean architecture and creates the refactoring plan",
-      { model: "anthropic/claude-sonnet-4.5" },
+      "Designs clean architecture and creates refactoring plan",
+      { model: "anthropic/claude-opus-4" }, // Strongest model
     )
-    // Use a fast model for implementation
     .addImplementer(
       "refactor_impl",
       "Refactoring Implementer",
       "Executes the refactoring plan",
-      { model: "anthropic/claude-3.5-sonnet" },
+      { model: "anthropic/claude-3.5-sonnet" }, // Fast & capable
     )
-    // Use a model good at testing
     .addReviewer(
       "test_validator",
       "Test Validator",
-      "Writes and runs tests to verify the refactoring",
-    )
+      "Writes and runs tests to verify refactoring",
+    ) // Uses default
     .withHierarchicalStrategy()
     .withRetryOnFailure(1)
     .build();
 
-  // Show model assignments
   console.log(chalk.bold("Model Assignments:\n"));
   for (const agent of workflow.agents) {
-    const modelInfo = agent.model
-      ? chalk.cyan(agent.model)
-      : chalk.dim("(default)");
-    console.log(`  ${chalk.bold(agent.name)}: ${modelInfo}`);
+    const model = agent.model ? chalk.cyan(agent.model) : chalk.dim("(default)");
+    console.log(`  ${chalk.bold(agent.name)}: ${model}`);
   }
   console.log();
 
@@ -338,33 +313,129 @@ export async function exampleMultiModelOrchestration(): Promise<void> {
   );
 
   const summary = orchestrator.getSummary();
-  console.log(chalk.bold("\n📊 Multi-Model Results\n"));
+  console.log(chalk.bold("\n📊 Results\n"));
   for (const result of summary.executionResults) {
-    const agent = workflow.agents.find((a) => a.id === result.agentId);
     const icon = result.success ? chalk.green("✓") : chalk.red("✗");
-    const model = agent?.model ?? chalk.dim("(default)");
+    const agent = workflow.agents.find((a) => a.id === result.agentId);
+    const model = agent?.model ? chalk.cyan(`[${agent.model}]`) : chalk.dim("[default]");
+    console.log(`${icon} ${chalk.bold(result.agentId)} ${model}`);
+    console.log(`   ${result.durationMs}ms, ${result.steps} steps`);
+  }
+}
+
+/**
+ * Example: Error handling and retry logic
+ */
+export async function exampleErrorHandling(): Promise<void> {
+  console.log(chalk.bold("\n⚠️  Error Handling & Retry\n"));
+
+  const workflow = new WorkflowBuilder(
+    "error_handling_001",
+    "Test error recovery with retries",
+  )
+    .addImplementer(
+      "risky_impl",
+      "Risky Implementer",
+      "An agent that might fail and will retry",
+    )
+    .addReviewer(
+      "fallback_reviewer",
+      "Fallback Reviewer",
+      "Reviews if main impl fails",
+    )
+    .withParallelStrategy(2, 20_000)
+    .withRetryOnFailure(3)
+    .withFailureMode("continue")
+    .build();
+
+  console.log(chalk.dim("Config:"));
+  console.log(chalk.dim(`  - Max retries: 3`));
+  console.log(chalk.dim(`  - Failure mode: continue`));
+  console.log(chalk.dim(`  - Timeout: 20s per agent\n`));
+
+  const orchestrator = new MultiAgentOrchestrator(workflow);
+
+  orchestrator.onEvent((event) => {
+    if (event.type === "agent:retry") {
+      const attempt = event.payload?.attempt || 1;
+      console.log(chalk.yellow(`↻ ${event.agentId} retry attempt ${attempt}`));
+    }
+  });
+
+  await withSpinner(
+    {
+      message: "Running with error handling...",
+      doneMessage: "completed",
+      failMessage: "failed",
+    },
+    () => orchestrator.execute(),
+  );
+
+  const summary = orchestrator.getSummary();
+  console.log(chalk.bold("\n📊 Retry Statistics\n"));
+  for (const result of summary.executionResults) {
     console.log(
-      `${icon} ${chalk.bold(result.agentId)} [${model}] (${result.role}) - ${result.steps} steps`,
+      `${result.agentId}: attempt ${result.attemptNumber} - ${result.success ? "✓" : "✗"}`,
     );
   }
 }
 
 /**
- * Interactive workflow creation and execution
+ * Example: Event-driven monitoring
  */
-export async function interactiveMultiAgentMode(): Promise<void> {
-  console.log(chalk.bold("\n🤖 Interactive Multi-Agent Mode\n"));
+export async function exampleEventDrivenMonitoring(): Promise<void> {
+  console.log(chalk.bold("\n📡 Event-Driven Monitoring\n"));
 
-  // For now, run the advanced example
-  // In a real app, this would have CLI prompts
-  await exampleAdvancedWorkflow();
+  const workflow = new WorkflowBuilder("events_001", "Demo event monitoring")
+    .addResearcher("researcher", "Researcher", "Gathers info")
+    .addImplementer("impl", "Implementer", "Implements", { dependsOn: ["researcher"] })
+    .addReviewer("reviewer", "Reviewer", "Reviews", { dependsOn: ["impl"] })
+    .withDagStrategy(2, 30_000)
+    .build();
+
+  const orchestrator = new MultiAgentOrchestrator(workflow);
+
+  const eventCounts = {
+    "agent:start": 0,
+    "agent:complete": 0,
+    "agent:failed": 0,
+    "workflow:start": 0,
+    "workflow:complete": 0,
+  };
+
+  orchestrator.onEvent((event) => {
+    const key = event.type as keyof typeof eventCounts;
+    if (key in eventCounts) eventCounts[key]++;
+
+    const icon =
+      event.type.includes("complete") || event.type === "workflow:start"
+        ? chalk.green("✓")
+        : chalk.red("✗");
+    console.log(`${icon} ${event.type}`);
+  });
+
+  await withSpinner(
+    {
+      message: "Monitoring events...",
+      doneMessage: "completed",
+      failMessage: "failed",
+    },
+    () => orchestrator.execute(),
+  );
+
+  console.log(chalk.bold("\n📊 Event Summary\n"));
+  for (const [type, count] of Object.entries(eventCounts)) {
+    console.log(`${type}: ${count}`);
+  }
 }
 
 export default {
   exampleCodeReviewWorkflow,
   exampleParallelDevelopment,
   exampleCollaborativeBugFix,
-  exampleAdvancedWorkflow,
+  exampleAdvancedDAGWorkflow,
+  exampleSecurityAudit,
   exampleMultiModelOrchestration,
-  interactiveMultiAgentMode,
+  exampleErrorHandling,
+  exampleEventDrivenMonitoring,
 };

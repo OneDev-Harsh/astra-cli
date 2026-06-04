@@ -4,6 +4,7 @@ import type {
   AgentPool,
   AgentContext,
   AgentMessage,
+  AgentStatus,
 } from "./types";
 
 /**
@@ -19,11 +20,15 @@ export class AgentPoolManager {
       activeAgents: new Set(),
       waitingAgents: new Set(),
       failedAgents: new Set(),
+      completedAgents: new Set(),
     };
   }
 
+  // ─── Registration ──────────────────────────────────────────────────────────
+
   /**
-   * Register a new agent in the pool
+   * Register a new agent in the pool.
+   * Idempotent: re-registering the same ID replaces the existing instance.
    */
   registerAgent(config: AgentConfig): AgentInstance {
     const instance: AgentInstance = {
@@ -37,9 +42,13 @@ export class AgentPoolManager {
           currentStep: 0,
           completedTasks: [],
           failedTasks: [],
+          retryCount: 0,
         },
       },
-      isActive: false,
+      status: "pending",
+      get isActive() {
+        return this.status === "running";
+      },
       lastMessageTime: new Date(),
       messageQueue: [],
       completionPercentage: 0,
@@ -51,87 +60,99 @@ export class AgentPoolManager {
     return instance;
   }
 
-  /**
-   * Get an agent by ID
-   */
+  // ─── Lookups ───────────────────────────────────────────────────────────────
+
   getAgent(agentId: string): AgentInstance | undefined {
     return this.pool.agents.get(agentId);
   }
 
-  /**
-   * Get all agents with a specific role
-   */
   getAgentsByRole(role: string): AgentInstance[] {
     return Array.from(this.pool.agents.values()).filter(
       (agent) => agent.config.role === role,
     );
   }
 
-  /**
-   * Get all active agents
-   */
+  getAgentsByTag(tag: string): AgentInstance[] {
+    return Array.from(this.pool.agents.values()).filter(
+      (agent) => agent.config.tags?.includes(tag),
+    );
+  }
+
+  getAgentsByStatus(status: AgentStatus): AgentInstance[] {
+    return Array.from(this.pool.agents.values()).filter(
+      (agent) => agent.status === status,
+    );
+  }
+
   getActiveAgents(): AgentInstance[] {
-    return Array.from(this.pool.activeAgents)
-      .map((id) => this.pool.agents.get(id))
-      .filter((agent) => agent !== undefined) as AgentInstance[];
+    return this._resolveIds(this.pool.activeAgents);
   }
 
-  /**
-   * Get all waiting agents (ready but not active)
-   */
   getWaitingAgents(): AgentInstance[] {
-    return Array.from(this.pool.waitingAgents)
-      .map((id) => this.pool.agents.get(id))
-      .filter((agent) => agent !== undefined) as AgentInstance[];
+    return this._resolveIds(this.pool.waitingAgents);
   }
 
-  /**
-   * Get all failed agents
-   */
   getFailedAgents(): AgentInstance[] {
-    return Array.from(this.pool.failedAgents)
-      .map((id) => this.pool.agents.get(id))
-      .filter((agent) => agent !== undefined) as AgentInstance[];
+    return this._resolveIds(this.pool.failedAgents);
   }
 
-  /**
-   * Mark an agent as active (currently executing)
-   */
+  getCompletedAgents(): AgentInstance[] {
+    return this._resolveIds(this.pool.completedAgents);
+  }
+
+  getAllAgents(): AgentInstance[] {
+    return Array.from(this.pool.agents.values());
+  }
+
+  private _resolveIds(ids: Set<string>): AgentInstance[] {
+    const result: AgentInstance[] = [];
+    for (const id of ids) {
+      const agent = this.pool.agents.get(id);
+      if (agent) result.push(agent);
+    }
+    return result;
+  }
+
+  // ─── Status Transitions ────────────────────────────────────────────────────
+
   activateAgent(agentId: string): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
 
-    agent.isActive = true;
+    agent.status = "running";
+    agent.startedAt = new Date();
     agent.lastMessageTime = new Date();
+
     this.pool.waitingAgents.delete(agentId);
-    this.pool.activeAgents.add(agentId);
     this.pool.failedAgents.delete(agentId);
+    this.pool.completedAgents.delete(agentId);
+    this.pool.activeAgents.add(agentId);
 
     return true;
   }
 
-  /**
-   * Mark an agent as inactive (waiting)
-   */
   deactivateAgent(agentId: string): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
 
-    agent.isActive = false;
+    agent.status = "completed";
+    agent.completedAt = new Date();
+    agent.completionPercentage = 100;
+
     this.pool.activeAgents.delete(agentId);
-    this.pool.waitingAgents.add(agentId);
+    this.pool.waitingAgents.delete(agentId);
+    this.pool.completedAgents.add(agentId);
 
     return true;
   }
 
-  /**
-   * Mark an agent as failed
-   */
   markAgentFailed(agentId: string): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
 
-    agent.isActive = false;
+    agent.status = "failed";
+    agent.completedAt = new Date();
+
     this.pool.activeAgents.delete(agentId);
     this.pool.waitingAgents.delete(agentId);
     this.pool.failedAgents.add(agentId);
@@ -139,9 +160,36 @@ export class AgentPoolManager {
     return true;
   }
 
-  /**
-   * Queue a message for an agent
-   */
+  markAgentRetrying(agentId: string): boolean {
+    const agent = this.pool.agents.get(agentId);
+    if (!agent) return false;
+
+    agent.status = "retrying";
+    agent.context.metadata.retryCount++;
+
+    this.pool.failedAgents.delete(agentId);
+    this.pool.activeAgents.delete(agentId);
+    this.pool.waitingAgents.add(agentId);
+
+    return true;
+  }
+
+  markAgentSkipped(agentId: string): boolean {
+    const agent = this.pool.agents.get(agentId);
+    if (!agent) return false;
+
+    agent.status = "skipped";
+    agent.completedAt = new Date();
+
+    this.pool.waitingAgents.delete(agentId);
+    this.pool.activeAgents.delete(agentId);
+    this.pool.completedAgents.add(agentId);
+
+    return true;
+  }
+
+  // ─── Messaging ─────────────────────────────────────────────────────────────
+
   queueMessageFor(agentId: string, message: AgentMessage): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
@@ -151,21 +199,18 @@ export class AgentPoolManager {
     return true;
   }
 
-  /**
-   * Get and clear message queue for an agent
-   */
+  /** Drain and return the message queue for an agent */
   flushMessageQueue(agentId: string): AgentMessage[] {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return [];
 
-    const messages = agent.messageQueue;
+    const messages = [...agent.messageQueue];
     agent.messageQueue = [];
     return messages;
   }
 
-  /**
-   * Update agent completion percentage
-   */
+  // ─── Context & Progress ────────────────────────────────────────────────────
+
   updateCompletion(agentId: string, percentage: number): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
@@ -174,9 +219,6 @@ export class AgentPoolManager {
     return true;
   }
 
-  /**
-   * Update agent context
-   */
   updateContext(agentId: string, context: Partial<AgentContext>): boolean {
     const agent = this.pool.agents.get(agentId);
     if (!agent) return false;
@@ -185,59 +227,111 @@ export class AgentPoolManager {
     return true;
   }
 
+  setFinding(agentId: string, key: string, value: unknown): boolean {
+    const agent = this.pool.agents.get(agentId);
+    if (!agent) return false;
+
+    if (!agent.context.metadata.findings) {
+      agent.context.metadata.findings = {};
+    }
+    agent.context.metadata.findings[key] = value;
+    return true;
+  }
+
+  // ─── DAG Dependency Checking ───────────────────────────────────────────────
+
   /**
-   * Get the full pool state
+   * Returns true if all agents listed in `dependsOn` for the given agent
+   * have completed successfully.
    */
+  areDependenciesMet(agentId: string): boolean {
+    const agent = this.pool.agents.get(agentId);
+    if (!agent) return false;
+
+    const deps = agent.config.dependsOn ?? [];
+    for (const depId of deps) {
+      const dep = this.pool.agents.get(depId);
+      if (!dep || dep.status !== "completed") return false;
+    }
+    return true;
+  }
+
+  /**
+   * Returns agent IDs whose dependencies are all completed and which are
+   * currently waiting (ready to run).
+   */
+  getReadyAgents(): AgentInstance[] {
+    return Array.from(this.pool.waitingAgents)
+      .map((id) => this.pool.agents.get(id))
+      .filter(
+        (agent): agent is AgentInstance =>
+          agent !== undefined && this.areDependenciesMet(agent.config.id),
+      );
+  }
+
+  // ─── Pool Inspection ──────────────────────────────────────────────────────
+
   getPool(): AgentPool {
     return this.pool;
   }
 
-  /**
-   * Check if all agents have completed
-   */
-  areAllAgentsComplete(): boolean {
+  areAllAgentsSettled(): boolean {
     return (
-      this.pool.activeAgents.size === 0 && this.pool.waitingAgents.size === 0
+      this.pool.activeAgents.size === 0 &&
+      this.pool.waitingAgents.size === 0
     );
   }
 
-  /**
-   * Check if any agents have failed
-   */
+  areAllAgentsComplete(): boolean {
+    return (
+      this.pool.activeAgents.size === 0 &&
+      this.pool.waitingAgents.size === 0 &&
+      this.pool.failedAgents.size === 0
+    );
+  }
+
   hasFailedAgents(): boolean {
     return this.pool.failedAgents.size > 0;
   }
 
-  /**
-   * Reset the entire pool
-   */
   reset(): void {
     this.pool = {
       agents: new Map(),
       activeAgents: new Set(),
       waitingAgents: new Set(),
       failedAgents: new Set(),
+      completedAgents: new Set(),
     };
   }
 
-  /**
-   * Get statistics about the pool
-   */
   getStats() {
+    const agents = Array.from(this.pool.agents.values());
+    const completionPercentage =
+      agents.length > 0
+        ? Math.round(
+            agents.reduce((sum, a) => sum + a.completionPercentage, 0) /
+              agents.length,
+          )
+        : 0;
+
     return {
       totalAgents: this.pool.agents.size,
       activeAgents: this.pool.activeAgents.size,
       waitingAgents: this.pool.waitingAgents.size,
       failedAgents: this.pool.failedAgents.size,
-      completionPercentage:
-        this.pool.agents.size > 0
-          ? Math.round(
-              Array.from(this.pool.agents.values()).reduce(
-                (sum, agent) => sum + agent.completionPercentage,
-                0,
-              ) / this.pool.agents.size,
-            )
-          : 0,
+      completedAgents: this.pool.completedAgents.size,
+      completionPercentage,
     };
+  }
+
+  /** Human-readable status snapshot for debugging */
+  debugSnapshot(): string {
+    const lines: string[] = [`Pool snapshot (${this.pool.agents.size} agents):`];
+    for (const [id, agent] of this.pool.agents) {
+      lines.push(
+        `  ${id.padEnd(24)} ${agent.status.padEnd(12)} ${agent.completionPercentage}%  retry=${agent.context.metadata.retryCount}`,
+      );
+    }
+    return lines.join("\n");
   }
 }

@@ -2,11 +2,15 @@ import type {
   AgentConfig,
   MultiAgentWorkflow,
   OrchestrationStrategy,
-  AgentRole,
+  StrategyType,
+  StrategyConfig,
 } from "./types";
 
+// ─── WorkflowBuilder ─────────────────────────────────────────────────────────
+
 /**
- * Fluent builder for creating multi-agent workflows
+ * Fluent builder for creating multi-agent workflows.
+ * Supports all strategy types including DAG (dependency-aware) execution.
  */
 export class WorkflowBuilder {
   private workflow: MultiAgentWorkflow;
@@ -18,7 +22,7 @@ export class WorkflowBuilder {
       agents: [],
       strategy: {
         type: "sequential",
-        config: {},
+        config: { failureMode: "fail-fast" },
       },
       initialPrompt: goal,
       createdAt: new Date(),
@@ -26,23 +30,19 @@ export class WorkflowBuilder {
     };
   }
 
-  /**
-   * Add an agent to the workflow
-   */
+  // ─── Agent Additions ───────────────────────────────────────────────────────
+
   addAgent(config: AgentConfig): this {
     this.workflow.agents.push(config);
     this.workflow.updatedAt = new Date();
     return this;
   }
 
-  /**
-   * Add a researcher agent (read-only, gathers information)
-   */
   addResearcher(
     id: string,
     name: string,
     description: string,
-    options?: { model?: string; systemPrompt?: string; maxSteps?: number },
+    options?: AgentOptions,
   ): this {
     return this.addAgent({
       id,
@@ -52,6 +52,9 @@ export class WorkflowBuilder {
       model: options?.model,
       systemPrompt: options?.systemPrompt,
       maxSteps: options?.maxSteps ?? 30,
+      dependsOn: options?.dependsOn,
+      timeoutMs: options?.timeoutMs,
+      tags: options?.tags,
       tools: [
         "read_file",
         "read_multiple_files",
@@ -73,14 +76,11 @@ export class WorkflowBuilder {
     });
   }
 
-  /**
-   * Add an implementer agent (can write code)
-   */
   addImplementer(
     id: string,
     name: string,
     description: string,
-    options?: { model?: string; systemPrompt?: string; maxSteps?: number },
+    options?: AgentOptions,
   ): this {
     return this.addAgent({
       id,
@@ -90,6 +90,9 @@ export class WorkflowBuilder {
       model: options?.model,
       systemPrompt: options?.systemPrompt,
       maxSteps: options?.maxSteps ?? 50,
+      dependsOn: options?.dependsOn,
+      timeoutMs: options?.timeoutMs,
+      tags: options?.tags,
       tools: [
         "read_file",
         "read_multiple_files",
@@ -120,14 +123,11 @@ export class WorkflowBuilder {
     });
   }
 
-  /**
-   * Add a reviewer agent (validates and critiques)
-   */
   addReviewer(
     id: string,
     name: string,
     description: string,
-    options?: { model?: string; systemPrompt?: string; maxSteps?: number },
+    options?: AgentOptions,
   ): this {
     return this.addAgent({
       id,
@@ -137,6 +137,9 @@ export class WorkflowBuilder {
       model: options?.model,
       systemPrompt: options?.systemPrompt,
       maxSteps: options?.maxSteps ?? 25,
+      dependsOn: options?.dependsOn,
+      timeoutMs: options?.timeoutMs,
+      tags: options?.tags,
       tools: [
         "read_file",
         "read_multiple_files",
@@ -156,14 +159,11 @@ export class WorkflowBuilder {
     });
   }
 
-  /**
-   * Add a coordinator agent (orchestrates others)
-   */
   addCoordinator(
     id: string,
     name: string,
     description: string,
-    options?: { model?: string; systemPrompt?: string; maxSteps?: number },
+    options?: AgentOptions,
   ): this {
     return this.addAgent({
       id,
@@ -173,6 +173,9 @@ export class WorkflowBuilder {
       model: options?.model,
       systemPrompt: options?.systemPrompt,
       maxSteps: options?.maxSteps ?? 20,
+      dependsOn: options?.dependsOn,
+      timeoutMs: options?.timeoutMs,
+      tags: options?.tags,
       tools: [
         "read_file",
         "list_files",
@@ -186,15 +189,12 @@ export class WorkflowBuilder {
     });
   }
 
-  /**
-   * Add a custom agent with specific tools
-   */
   addCustomAgent(
     id: string,
     name: string,
     description: string,
     tools: string[],
-    options?: { model?: string; systemPrompt?: string; maxSteps?: number },
+    options?: AgentOptions,
   ): this {
     return this.addAgent({
       id,
@@ -204,154 +204,177 @@ export class WorkflowBuilder {
       model: options?.model,
       systemPrompt: options?.systemPrompt,
       maxSteps: options?.maxSteps ?? 30,
+      dependsOn: options?.dependsOn,
+      timeoutMs: options?.timeoutMs,
+      tags: options?.tags,
       tools,
     });
   }
 
-  /**
-   * Set orchestration strategy to sequential
-   */
-  withSequentialStrategy(): this {
+  // ─── Strategy ──────────────────────────────────────────────────────────────
+
+  withSequentialStrategy(config?: Partial<StrategyConfig>): this {
     this.workflow.strategy = {
       type: "sequential",
-      config: {
-        retryOnFailure: false,
-      },
+      config: { failureMode: "fail-fast", ...config },
     };
-    this.workflow.updatedAt = new Date();
-    return this;
+    return this._touch();
+  }
+
+  withParallelStrategy(maxConcurrent = 3, timeout = 30_000, config?: Partial<StrategyConfig>): this {
+    this.workflow.strategy = {
+      type: "parallel",
+      config: { maxConcurrentAgents: maxConcurrent, timeout, failureMode: "continue", ...config },
+    };
+    return this._touch();
+  }
+
+  withHierarchicalStrategy(config?: Partial<StrategyConfig>): this {
+    this.workflow.strategy = {
+      type: "hierarchical",
+      config: { failureMode: "fail-fast", ...config },
+    };
+    return this._touch();
+  }
+
+  withCollaborativeStrategy(timeout = 60_000, config?: Partial<StrategyConfig>): this {
+    this.workflow.strategy = {
+      type: "collaborative",
+      config: { timeout, failureMode: "continue", ...config },
+    };
+    return this._touch();
   }
 
   /**
-   * Set orchestration strategy to parallel
+   * DAG strategy: agents run as soon as all their `dependsOn` are satisfied.
+   * You must set `dependsOn` on each AgentConfig that has prerequisites.
    */
-  withParallelStrategy(
-    maxConcurrent: number = 3,
-    timeout: number = 30000,
-  ): this {
+  withDagStrategy(maxConcurrent = 4, timeout = 60_000, config?: Partial<StrategyConfig>): this {
     this.workflow.strategy = {
-      type: "parallel",
+      type: "dag",
       config: {
         maxConcurrentAgents: maxConcurrent,
         timeout,
+        failureMode: "fail-at-end",
+        ...config,
       },
     };
-    this.workflow.updatedAt = new Date();
-    return this;
+    return this._touch();
   }
 
-  /**
-   * Set orchestration strategy to hierarchical
-   */
-  withHierarchicalStrategy(): this {
-    this.workflow.strategy = {
-      type: "hierarchical",
-      config: {},
-    };
-    this.workflow.updatedAt = new Date();
-    return this;
-  }
-
-  /**
-   * Set orchestration strategy to collaborative
-   */
-  withCollaborativeStrategy(timeout: number = 60000): this {
-    this.workflow.strategy = {
-      type: "collaborative",
-      config: {
-        timeout,
-      },
-    };
-    this.workflow.updatedAt = new Date();
-    return this;
-  }
-
-  /**
-   * Enable retry on failure
-   */
-  withRetryOnFailure(maxRetries: number = 2): this {
+  withRetryOnFailure(maxRetries = 2): this {
     this.workflow.strategy.config.retryOnFailure = true;
     this.workflow.strategy.config.maxRetries = maxRetries;
-    this.workflow.updatedAt = new Date();
-    return this;
+    return this._touch();
   }
 
-  /**
-   * Set fallback agents (used if primary agents fail)
-   */
   withFallbackAgents(agentIds: string[]): this {
     this.workflow.strategy.config.fallbackAgents = agentIds;
-    this.workflow.updatedAt = new Date();
-    return this;
+    return this._touch();
   }
 
-  /**
-   * Set expected output format/description
-   */
+  withFailureMode(mode: StrategyConfig["failureMode"]): this {
+    this.workflow.strategy.config.failureMode = mode;
+    return this._touch();
+  }
+
   withExpectedOutput(description: string): this {
     this.workflow.expectedOutput = description;
-    this.workflow.updatedAt = new Date();
-    return this;
+    return this._touch();
   }
 
-  /**
-   * Build and return the workflow
-   */
+  withMeta(meta: Record<string, unknown>): this {
+    this.workflow.meta = { ...this.workflow.meta, ...meta };
+    return this._touch();
+  }
+
+  // ─── Build & Inspect ───────────────────────────────────────────────────────
+
   build(): MultiAgentWorkflow {
-    this.workflow.updatedAt = new Date();
-    return { ...this.workflow };
+    return { ...this.workflow, agents: [...this.workflow.agents] };
   }
 
-  /**
-   * Get current workflow state
-   */
   getWorkflow(): MultiAgentWorkflow {
     return this.workflow;
   }
 
-  /**
-   * Validate the workflow configuration
-   */
-  validate(): { isValid: boolean; errors: string[] } {
-    const errors: string[] = [];
+  // ─── Validation ────────────────────────────────────────────────────────────
 
-    if (!this.workflow.id) errors.push("Workflow ID is required");
-    if (!this.workflow.goal) errors.push("Goal is required");
+  static validateWorkflow(
+  workflow: MultiAgentWorkflow
+): ValidationResult {
+
+  const builder = new WorkflowBuilder(
+    workflow.id,
+    workflow.goal
+  );
+
+  builder.getWorkflow().agents.push(
+    ...workflow.agents
+  );
+
+  return builder.validate();
+}
+
+  validate(): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!this.workflow.id.trim()) errors.push("Workflow ID is required");
+    if (!this.workflow.goal.trim()) errors.push("Goal is required");
+    console.log(
+    "Workflow agents:",
+    this.workflow.agents.length
+);
     if (this.workflow.agents.length === 0)
       errors.push("At least one agent is required");
 
-    // Check for duplicate agent IDs
+    // Duplicate IDs
     const agentIds = this.workflow.agents.map((a) => a.id);
-    const uniqueIds = new Set(agentIds);
-    if (uniqueIds.size !== agentIds.length) {
-      const duplicates = agentIds.filter(
-        (id, idx) => agentIds.indexOf(id) !== idx,
-      );
-      errors.push(`Duplicate agent IDs found: ${duplicates.join(", ")}`);
-    }
+    const seen = new Set<string>();
+    const duplicates = agentIds.filter((id) => {
+      if (seen.has(id)) return true;
+      seen.add(id);
+      return false;
+    });
+    if (duplicates.length > 0)
+      errors.push(`Duplicate agent IDs: ${duplicates.join(", ")}`);
 
-    // Check for empty agent ID or name
+    // Per-agent checks
     for (const agent of this.workflow.agents) {
-      if (!agent.id.trim()) errors.push("Agent ID cannot be empty");
-      if (!agent.name.trim()) errors.push(`Agent name cannot be empty (id: ${agent.id})`);
+      if (!agent.id.trim())
+        errors.push("Agent ID cannot be empty");
+      if (!agent.name.trim())
+        errors.push(`Agent name cannot be empty (id: ${agent.id})`);
       if (agent.maxSteps <= 0)
-        errors.push(`Agent ${agent.id} must have maxSteps > 0`);
+        errors.push(`Agent ${agent.id}: maxSteps must be > 0`);
       if (agent.tools.length === 0)
-        errors.push(`Agent ${agent.id} must have at least one tool`);
+        errors.push(`Agent ${agent.id}: must have at least one tool`);
+      if (agent.timeoutMs !== undefined && agent.timeoutMs <= 0)
+        errors.push(`Agent ${agent.id}: timeoutMs must be > 0`);
+
+      // Dependency checks
+      for (const dep of agent.dependsOn ?? []) {
+        if (!agentIds.includes(dep))
+          errors.push(`Agent ${agent.id}: dependency '${dep}' not found`);
+        if (dep === agent.id)
+          errors.push(`Agent ${agent.id}: cannot depend on itself`);
+      }
     }
 
-    // Validate strategy
-    const validStrategies: OrchestrationStrategy["type"][] = [
-      "sequential",
-      "parallel",
-      "hierarchical",
-      "collaborative",
+    // DAG cycle detection
+    if (this.workflow.strategy.type === "dag") {
+      const cycle = this._detectCycle();
+      if (cycle) errors.push(`Dependency cycle detected: ${cycle}`);
+    }
+
+    // Strategy-specific checks
+    const validStrategies: StrategyType[] = [
+      "sequential", "parallel", "hierarchical", "collaborative", "dag",
     ];
-    if (!validStrategies.includes(this.workflow.strategy.type)) {
+    if (!validStrategies.includes(this.workflow.strategy.type))
       errors.push(`Invalid strategy type: ${this.workflow.strategy.type}`);
-    }
 
-    // For hierarchical strategy, ensure there's a coordinator
     if (
       this.workflow.strategy.type === "hierarchical" &&
       !this.workflow.agents.some((a) => a.role === "coordinator")
@@ -359,132 +382,192 @@ export class WorkflowBuilder {
       errors.push("Hierarchical strategy requires a coordinator agent");
     }
 
-    // For collaborative strategy with >1 agent, warn about timeout
     if (
       this.workflow.strategy.type === "collaborative" &&
       this.workflow.agents.length > 1 &&
       !this.workflow.strategy.config.timeout
     ) {
-      errors.push(
+      warnings.push(
         "Collaborative strategy with multiple agents should have a timeout configured",
       );
     }
 
-    // Validate fallback agents exist
-    const fallbackIds = this.workflow.strategy.config.fallbackAgents;
-    if (fallbackIds) {
-      for (const fid of fallbackIds) {
-        if (!this.workflow.agents.some((a) => a.id === fid)) {
-          errors.push(
-            `Fallback agent '${fid}' not found in workflow agents`,
-          );
-        }
-      }
+    // Fallback agent existence
+    for (const fid of this.workflow.strategy.config.fallbackAgents ?? []) {
+      if (!agentIds.includes(fid))
+        errors.push(`Fallback agent '${fid}' not found in workflow agents`);
     }
 
-    return {
-      isValid: errors.length === 0,
-      errors,
+    // Warn if DAG strategy used but no agent has dependsOn
+    if (
+      this.workflow.strategy.type === "dag" &&
+      this.workflow.agents.every((a) => !a.dependsOn?.length)
+    ) {
+      warnings.push(
+        "DAG strategy selected but no agent has dependsOn — consider using parallel instead",
+      );
+    }
+
+    return { isValid: errors.length === 0, errors, warnings };
+  }
+
+  private _detectCycle(): string | null {
+    const graph = new Map<string, string[]>();
+    for (const agent of this.workflow.agents) {
+      graph.set(agent.id, agent.dependsOn ?? []);
+    }
+
+    const visited = new Set<string>();
+    const stack = new Set<string>();
+
+    const dfs = (id: string, path: string[]): string | null => {
+      if (stack.has(id)) return [...path, id].join(" → ");
+      if (visited.has(id)) return null;
+
+      visited.add(id);
+      stack.add(id);
+
+      for (const dep of graph.get(id) ?? []) {
+        const cycle = dfs(dep, [...path, id]);
+        if (cycle) return cycle;
+      }
+
+      stack.delete(id);
+      return null;
     };
+
+    for (const agent of this.workflow.agents) {
+      const cycle = dfs(agent.id, []);
+      if (cycle) return cycle;
+    }
+    return null;
+  }
+
+  private _touch(): this {
+    this.workflow.updatedAt = new Date();
+    return this;
   }
 }
 
-/**
- * Predefined workflow templates
- */
+// ─── Supporting Types ─────────────────────────────────────────────────────────
+
+export interface AgentOptions {
+  model?: string;
+  systemPrompt?: string;
+  maxSteps?: number;
+  dependsOn?: string[];
+  timeoutMs?: number;
+  tags?: string[];
+}
+
+export interface ValidationResult {
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+// ─── Workflow Templates ────────────────────────────────────────────────────────
+
 export class WorkflowTemplates {
-  /**
-   * Create a code review workflow: researcher → implementer → reviewer
-   */
-  static codeReviewWorkflow(
-    workflowId: string,
-    goal: string,
-  ): MultiAgentWorkflow {
+  static codeReviewWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
     return new WorkflowBuilder(workflowId, goal)
-      .addResearcher(
-        "research_agent",
-        "Research Agent",
-        "Analyzes the codebase and gathers requirements",
-      )
-      .addImplementer(
-        "impl_agent",
-        "Implementation Agent",
-        "Writes and modifies code based on requirements",
-      )
-      .addReviewer(
-        "review_agent",
-        "Review Agent",
-        "Reviews code for quality, style, and correctness",
-      )
+      .addResearcher("research_agent", "Research Agent", "Analyzes the codebase and gathers requirements")
+      .addImplementer("impl_agent", "Implementation Agent", "Writes and modifies code", {
+        dependsOn: ["research_agent"],
+      })
+      .addReviewer("review_agent", "Review Agent", "Reviews code for quality and correctness", {
+        dependsOn: ["impl_agent"],
+      })
       .withSequentialStrategy()
       .withRetryOnFailure(1)
       .build();
   }
 
-  /**
-   * Create a feature development workflow with parallel agents
-   */
-  static featureDevelopmentWorkflow(
-    workflowId: string,
-    goal: string,
-  ): MultiAgentWorkflow {
+  static featureDevelopmentWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
     return new WorkflowBuilder(workflowId, goal)
-      .addCoordinator(
-        "coordinator",
-        "Coordinator",
-        "Plans the feature development",
-      )
-      .addImplementer(
-        "backend_dev",
-        "Backend Developer",
-        "Implements backend functionality",
-      )
-      .addImplementer(
-        "frontend_dev",
-        "Frontend Developer",
-        "Implements frontend functionality",
-      )
-      .addReviewer("qa_agent", "QA Agent", "Tests and validates the feature")
-      .withHierarchicalStrategy()
+      .addCoordinator("coordinator", "Coordinator", "Plans the feature development")
+      .addImplementer("backend_dev", "Backend Developer", "Implements backend functionality", {
+        dependsOn: ["coordinator"],
+      })
+      .addImplementer("frontend_dev", "Frontend Developer", "Implements frontend functionality", {
+        dependsOn: ["coordinator"],
+      })
+      .addReviewer("qa_agent", "QA Agent", "Tests and validates the feature", {
+        dependsOn: ["backend_dev", "frontend_dev"],
+      })
+      .withDagStrategy(3, 60_000)
       .build();
   }
 
-  /**
-   * Create a bug fixing workflow
-   */
-  static bugFixingWorkflow(
-    workflowId: string,
-    goal: string,
-  ): MultiAgentWorkflow {
+  static bugFixingWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
     return new WorkflowBuilder(workflowId, goal)
-      .addResearcher(
-        "debug_agent",
-        "Debug Agent",
-        "Analyzes the bug and traces its cause",
-      )
-      .addImplementer("fix_agent", "Fix Agent", "Implements the bug fix")
-      .addReviewer(
-        "test_agent",
-        "Test Agent",
-        "Verifies the fix works correctly",
-      )
+      .addResearcher("debug_agent", "Debug Agent", "Analyzes the bug and traces its cause")
+      .addImplementer("fix_agent", "Fix Agent", "Implements the bug fix", {
+        dependsOn: ["debug_agent"],
+      })
+      .addReviewer("test_agent", "Test Agent", "Verifies the fix works correctly", {
+        dependsOn: ["fix_agent"],
+      })
       .withSequentialStrategy()
       .withRetryOnFailure(2)
       .build();
   }
 
-  /**
-   * Create a collaborative research workflow
-   */
-  static collaborativeResearchWorkflow(
-    workflowId: string,
-    goal: string,
-  ): MultiAgentWorkflow {
+  static collaborativeResearchWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
     return new WorkflowBuilder(workflowId, goal)
       .addResearcher("researcher_1", "Researcher 1", "Primary research")
       .addResearcher("researcher_2", "Researcher 2", "Secondary research")
       .addResearcher("researcher_3", "Researcher 3", "Validation research")
-      .withParallelStrategy(3, 45000)
+      .withParallelStrategy(3, 45_000)
+      .build();
+  }
+
+  /**
+   * Security audit: researcher scans, two parallel auditors review separately,
+   * then a coordinator synthesizes findings — true DAG execution.
+   */
+  static securityAuditWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
+    return new WorkflowBuilder(workflowId, goal)
+      .addResearcher("scanner", "Code Scanner", "Scans codebase for potential vulnerabilities")
+      .addReviewer("static_auditor", "Static Auditor", "Static analysis of security issues", {
+        dependsOn: ["scanner"],
+        tags: ["security"],
+      })
+      .addReviewer("dependency_auditor", "Dependency Auditor", "Audits third-party dependencies", {
+        dependsOn: ["scanner"],
+        tags: ["security"],
+      })
+      .addCoordinator("report_coordinator", "Report Coordinator", "Synthesizes audit findings into a report", {
+        dependsOn: ["static_auditor", "dependency_auditor"],
+      })
+      .withDagStrategy(2, 90_000)
+      .withExpectedOutput("Full security audit report with prioritized findings")
+      .build();
+  }
+
+  /**
+   * Full-stack feature with database, API, and frontend in parallel, then E2E tests.
+   */
+  static fullStackFeatureWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
+    return new WorkflowBuilder(workflowId, goal)
+      .addCoordinator("architect", "Architect", "Designs the system and creates specs", {
+        model: "openrouter/owl-alpha",
+      })
+      .addImplementer("db_dev", "DB Developer", "Schema design and migrations", {
+        dependsOn: ["architect"],
+      })
+      .addImplementer("api_dev", "API Developer", "REST/GraphQL endpoints", {
+        dependsOn: ["architect"],
+      })
+      .addImplementer("ui_dev", "UI Developer", "Frontend components and pages", {
+        dependsOn: ["architect"],
+      })
+      .addReviewer("integration_tester", "Integration Tester", "End-to-end integration tests", {
+        dependsOn: ["db_dev", "api_dev", "ui_dev"],
+      })
+      .withDagStrategy(3, 120_000)
+      .withRetryOnFailure(1)
+      .withExpectedOutput("Full feature implementation with passing tests")
       .build();
   }
 }

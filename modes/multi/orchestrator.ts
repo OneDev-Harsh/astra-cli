@@ -5,11 +5,11 @@
  * application alongside existing modes (agent, ask, plan).
  */
 
-import { text, isCancel, select, confirm } from "@clack/prompts";
+import { text, isCancel, select, confirm, multiselect } from "@clack/prompts";
 import chalk from "chalk";
 import { MultiAgentOrchestrator } from "./multi-agent-orchestrator";
 import { WorkflowBuilder, WorkflowTemplates } from "./workflow-builder";
-import type { MultiAgentWorkflow } from "./types";
+import type { MultiAgentWorkflow, OrchestratorEvent } from "./types";
 import { composeBeforeAfter, formatPatch } from "../agent/diff-view";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { withSpinner } from "../../tui/spinner";
@@ -24,10 +24,7 @@ interface ReviewGroup {
   patch: string | null;
 }
 
-function groupPendingByAgent(
-  agentId: string,
-  pending: ActionLog[],
-): ReviewGroup[] {
+function groupPendingByAgent(agentId: string, pending: ActionLog[]): ReviewGroup[] {
   const byPath = new Map<string, ActionLog[]>();
   const shells: ActionLog[] = [];
 
@@ -42,14 +39,10 @@ function groupPendingByAgent(
   }
 
   const groups: ReviewGroup[] = [];
+  const pathEntries = [...byPath.entries()].sort(([a], [b]) => a.localeCompare(b));
 
-  const pathEntries = [...byPath.entries()].sort(([a], [b]) =>
-    a.localeCompare(b),
-  );
   for (const [p, acts] of pathEntries) {
-    const sorted = acts.sort(
-      (x, y) => x.timestamp.getTime() - y.timestamp.getTime(),
-    );
+    const sorted = acts.sort((x, y) => x.timestamp.getTime() - y.timestamp.getTime());
     const ids = sorted.map((x) => x.id);
 
     if (sorted.every((x) => x.type === "folder_create")) {
@@ -78,23 +71,25 @@ function groupPendingByAgent(
   return groups;
 }
 
-/**
- * Main multi-agent mode entry point
- */
-export async function runMultiAgentMode(): Promise<void> {
-  console.log(chalk.bold("\n👥 Multi-Agent Mode\n"));
+// ─── Main Entry Point ──────────────────────────────────────────────────────
 
-  // Step 1: Choose workflow type
+export async function runMultiAgentMode(): Promise<void> {
+  console.log(chalk.bold("\n👥 Multi-Agent Orchestration\n"));
+
   const workflowType = await select({
-    message: "Select workflow type",
+    message: "What would you like to do?",
     options: [
       {
         value: "template",
-        label: "Use predefined template",
+        label: "Use a predefined workflow template",
       },
       {
         value: "custom",
-        label: "Create custom workflow",
+        label: "Build a custom workflow",
+      },
+      {
+        value: "advanced",
+        label: "Advanced: DAG with dependencies",
       },
     ],
   });
@@ -104,279 +99,151 @@ export async function runMultiAgentMode(): Promise<void> {
   let workflow;
 
   if (workflowType === "template") {
-    workflow = await selectTemplate();
+    workflow = await selectTemplateWorkflow();
+  } else if (workflowType === "advanced") {
+    workflow = await buildAdvancedDAGWorkflow();
   } else {
     workflow = await buildCustomWorkflow();
   }
 
   if (!workflow) return;
 
-  // Step 2: Validate workflow
-  const builder = new WorkflowBuilder(workflow.id, workflow.goal);
-  for (const agent of workflow.agents) {
-    builder.addAgent(agent);
-  }
-  builder.getWorkflow().strategy = workflow.strategy;
-  const { isValid, errors } = builder.validate();
-
-  if (!isValid) {
+  // Validate
+  const validation =
+  WorkflowBuilder.validateWorkflow(workflow);
+  if (!validation.isValid) {
     console.log(chalk.red("\n❌ Workflow validation failed:\n"));
-    for (const error of errors) {
+    for (const error of validation.errors) {
       console.log(chalk.red(`  • ${error}`));
+    }
+    if (validation.warnings.length > 0) {
+      console.log(chalk.yellow("\n⚠️  Warnings:\n"));
+      for (const warning of validation.warnings) {
+        console.log(chalk.yellow(`  • ${warning}`));
+      }
     }
     return;
   }
 
-  // Step 3: Review workflow configuration
-  console.log(chalk.bold("\n📋 Workflow Configuration\n"));
-  console.log(`Goal: ${workflow.goal}`);
-  console.log(`Strategy: ${workflow.strategy.type}`);
-  console.log(`Agents: ${workflow.agents.length}`);
-  console.log(
-    `  ${workflow.agents
-      .map(
-        (a) =>
-          `• ${a.name} (${a.role})${a.model ? ` [model: ${a.model}]` : ""}`,
-      )
-      .join("\n  ")}`,
-  );
+  if (validation.warnings.length > 0) {
+    console.log(chalk.yellow("\n⚠️  Warnings:\n"));
+    for (const warning of validation.warnings) {
+      console.log(chalk.yellow(`  • ${warning}`));
+    }
+  }
 
-  // Step 4: Execute workflow
+  // Review before execution
+  displayWorkflowSummary(workflow);
+
+  const shouldContinue = await confirm({
+    message: "Execute this workflow?",
+    initialValue: true,
+  });
+  if (isCancel(shouldContinue) || !shouldContinue) {
+    console.log(chalk.dim("\nWorkflow cancelled.\n"));
+    return;
+  }
+
+  // Execute
   const orchestrator = new MultiAgentOrchestrator(workflow);
+
+  // Setup event listener for real-time progress
+  const unsubscribe = orchestrator.onEvent((event: OrchestratorEvent) => {
+    if (event.type === "agent:start") {
+      orchestrationLogger.debug(`Agent ${event.agentId} starting...`);
+    } else if (event.type === "agent:complete") {
+      orchestrationLogger.debug(`Agent ${event.agentId} completed`);
+    }
+  });
 
   await withSpinner(
     {
-      message: "Orchestrating multi-agent workflow...",
+      message: "Orchestrating workflow...",
       doneMessage: "workflow completed",
       failMessage: "workflow failed",
     },
     () => orchestrator.execute(),
   );
 
-  // Step 5: Display results
+  unsubscribe();
+
+  // Display results
   displayExecutionResults(orchestrator);
 
-  // Step 6: Review and approve changes from all agents
+  // Approval flow
   await runMultiAgentApprovalFlow(orchestrator);
 }
 
-/**
- * Run approval flow for all agent trackers.
- * Uses the REAL per-agent trackers and executors from the orchestrator,
- * ensuring that approved changes are actually written to disk.
- */
-async function runMultiAgentApprovalFlow(
-  orchestrator: MultiAgentOrchestrator,
-): Promise<void> {
-  const trackers = orchestrator.getAllTrackers();
-  const executors = orchestrator.getAllExecutors();
+// ─── Workflow Selection ────────────────────────────────────────────────────
 
-  // Collect all pending mutations across all agents
-  let totalPending = 0;
-  for (const [, tracker] of trackers) {
-    const pending = tracker.getPendingMutations();
-    totalPending += pending.length;
-  }
+const TEMPLATE_CATALOG = [
+  {
+    id: "code_review",
+    name: "Code Review",
+    description: "Researcher → Implementer → Reviewer (sequential)",
+    template: WorkflowTemplates.codeReviewWorkflow,
+  },
+  {
+    id: "feature_dev",
+    name: "Feature Development",
+    description: "Coordinator plans, then backend & frontend develop in parallel, QA tests",
+    template: WorkflowTemplates.featureDevelopmentWorkflow,
+  },
+  {
+    id: "bug_fix",
+    name: "Bug Fixing",
+    description: "Debug → Fix → Test (sequential with retry)",
+    template: WorkflowTemplates.bugFixingWorkflow,
+  },
+  {
+    id: "research",
+    name: "Collaborative Research",
+    description: "Multiple researchers work in parallel, sharing insights",
+    template: WorkflowTemplates.collaborativeResearchWorkflow,
+  },
+  {
+    id: "security_audit",
+    name: "Security Audit",
+    description: "Parallel scanners → coordinator synthesis (DAG)",
+    template: WorkflowTemplates.securityAuditWorkflow,
+  },
+  {
+    id: "fullstack",
+    name: "Full-Stack Feature",
+    description: "Architect → parallel devs (DB, API, UI) → E2E tests (DAG)",
+    template: WorkflowTemplates.fullStackFeatureWorkflow,
+  },
+];
 
-  if (totalPending === 0) {
-    console.log(chalk.dim("\nNo staged file changes to review.\n"));
-    return;
-  }
-
-  console.log(
-    chalk.bold(
-      `\n📝 ${totalPending} staged change(s) from ${trackers.size} agent(s)\n`,
-    ),
-  );
-
-  const choice = await select({
-    message: "Apply staged changes?",
-    options: [
-      { value: "all", label: "Approve and apply all" },
-      { value: "select", label: "Review one by one" },
-      { value: "cancel", label: "Cancel / discard all" },
-    ],
+async function selectTemplateWorkflow(): Promise<MultiAgentWorkflow | null> {
+  const selected = await select({
+    message: "Select a workflow template",
+    options: TEMPLATE_CATALOG.map((t) => ({
+      value: t.id,
+      label: `${chalk.bold(t.name)} — ${chalk.dim(t.description)}`,
+    })),
   });
 
-  if (isCancel(choice) || choice === "cancel") {
-    for (const [, tracker] of trackers) {
-      for (const action of tracker.getPendingMutations()) {
-        tracker.updateStatus(action.id, "rejected", false);
-      }
-    }
-    for (const [, executor] of executors) {
-      executor.discardChanges();
-    }
-    console.log(chalk.yellow("\nAll changes discarded.\n"));
-    return;
-  }
+  if (isCancel(selected)) return null;
 
-  if (choice === "all") {
-    for (const [, tracker] of trackers) {
-      for (const action of tracker.getPendingMutations()) {
-        tracker.updateStatus(action.id, "approved", true);
-      }
-    }
-  } else if (choice === "select") {
-    // Review each agent's changes one by one
-    for (const [agentId, tracker] of trackers) {
-      const pending = tracker.getPendingMutations();
-      if (pending.length === 0) continue;
-
-      console.log(
-        chalk.bold(
-          `\n🤖 Agent: ${agentId} (${pending.length} change(s))`,
-        ),
-      );
-
-      const groups = groupPendingByAgent(agentId, pending);
-
-      for (const g of groups) {
-        while (true) {
-          const opt = await select({
-            message: chalk.bold(g.label),
-            options: [
-              { value: "accept", label: "Accept" },
-              {
-                value: "diff",
-                label: "Show diff",
-                hint: g.patch ? "" : "N/A",
-              },
-              { value: "reject", label: "Reject" },
-            ],
-          });
-
-          if (isCancel(opt)) {
-            // Reject everything on cancel
-            for (const [, t] of trackers) {
-              for (const a of t.getPendingMutations()) {
-                t.updateStatus(a.id, "rejected", false);
-              }
-            }
-            for (const [, executor] of executors) {
-              executor.discardChanges();
-            }
-            console.log(chalk.yellow("\nAll changes discarded.\n"));
-            return;
-          }
-
-          if (opt === "diff") {
-            if (g.patch) {
-              console.log(
-                "\n" +
-                  renderTerminalMarkdown("```diff\n" + g.patch + "\n```\n") +
-                  "\n",
-              );
-            }
-            continue;
-          }
-
-          for (const id of g.actionIds) {
-            tracker.updateStatus(
-              id,
-              opt === "accept" ? "approved" : "rejected",
-              opt === "accept",
-            );
-          }
-
-          break;
-        }
-      }
-    }
-  }
-
-  // Apply approved changes using each agent's REAL executor.
-  // The executor already has the overlay state from the agent's tool calls,
-  // and the tracker now has "approved" status on the chosen actions.
-  await withSpinner(
-    {
-      message: "Applying approved changes…",
-      doneMessage: "all changes applied",
-      failMessage: "some operations failed",
-    },
-    async () => {
-      const allErrors: string[] = [];
-
-      for (const [agentId, executor] of executors) {
-        const { errors } = executor.applyApprovedFromTracker();
-        allErrors.push(...errors.map((e) => `[${agentId}] ${e}`));
-      }
-
-      if (allErrors.length > 0) {
-        console.log(chalk.red("\nSome operations reported errors:\n"));
-        for (const e of allErrors) {
-          console.log(chalk.red(`  · ${e}`));
-        }
-      } else {
-        console.log(chalk.green("\n✔ All changes applied.\n"));
-      }
-    },
-  );
-}
-
-/**
- * Select from predefined workflow templates
- */
-async function selectTemplate() {
-  const template = await select({
-    message: "Select workflow template",
-    options: [
-      {
-        value: "code_review",
-        label: "Code Review (Researcher → Implementer → Reviewer)",
-      },
-      {
-        value: "feature_dev",
-        label: "Feature Development (Coordinator → Parallel Developers → QA)",
-      },
-      {
-        value: "bug_fix",
-        label: "Bug Fixing (Debug → Fix → Test)",
-      },
-      {
-        value: "research",
-        label: "Collaborative Research (Parallel Researchers)",
-      },
-    ],
-  });
-
-  if (isCancel(template)) return null;
+  const catalog = TEMPLATE_CATALOG.find((t) => t.id === selected);
+  if (!catalog) return null;
 
   const goal = await text({
-    message: "What is the goal for this workflow?",
+    message: "Describe the goal for this workflow",
+    placeholder: catalog.description,
   });
 
   if (isCancel(goal) || !goal.trim()) return null;
 
   const timestamp = Date.now();
-  const workflowId = `workflow_${template}_${timestamp}`;
-
-  let workflow;
-
-  switch (template) {
-    case "code_review":
-      workflow = WorkflowTemplates.codeReviewWorkflow(workflowId, goal);
-      break;
-    case "feature_dev":
-      workflow = WorkflowTemplates.featureDevelopmentWorkflow(workflowId, goal);
-      break;
-    case "bug_fix":
-      workflow = WorkflowTemplates.bugFixingWorkflow(workflowId, goal);
-      break;
-    case "research":
-      workflow = WorkflowTemplates.collaborativeResearchWorkflow(workflowId, goal);
-      break;
-    default:
-      return null;
-  }
-
-  return workflow;
+  const workflowId = `workflow_${selected}_${timestamp}`;
+  return catalog.template(workflowId, goal.trim());
 }
 
-/**
- * Build a custom workflow interactively
- */
-async function buildCustomWorkflow() {
+// ─── Custom Workflow Builder ───────────────────────────────────────────────
+
+async function buildCustomWorkflow(): Promise<MultiAgentWorkflow | null> {
   const goal = await text({
     message: "What is the goal of this workflow?",
   });
@@ -384,15 +251,15 @@ async function buildCustomWorkflow() {
   if (isCancel(goal) || !goal.trim()) return null;
 
   const timestamp = Date.now();
-  const builder = new WorkflowBuilder(`workflow_custom_${timestamp}`, goal);
+  const builder = new WorkflowBuilder(`workflow_custom_${timestamp}`, goal.trim());
 
   // Add agents
-  let addingAgents = true;
   let agentCount = 0;
+  let addingAgents = true;
 
   while (addingAgents && agentCount < 10) {
     const agentType = await select({
-      message: `Add agent #${agentCount + 1}?`,
+      message: `Agent #${agentCount + 1}?`,
       options: [
         { value: "researcher", label: "Researcher (read-only analysis)" },
         { value: "implementer", label: "Implementer (write code)" },
@@ -404,26 +271,21 @@ async function buildCustomWorkflow() {
     });
 
     if (isCancel(agentType)) return null;
-
-    if (agentType === "done") {
-      addingAgents = false;
-      break;
-    }
+    if (agentType === "done") break;
 
     const name = await text({
-      message: `Agent name`,
-      initialValue: `${agentType}_agent_${agentCount + 1}`,
+      message: "Agent name",
+      initialValue: `${agentType}_${agentCount + 1}`,
     });
 
     if (isCancel(name)) return null;
 
     const description = await text({
-      message: "Agent description",
+      message: "What does this agent do?",
     });
 
     if (isCancel(description)) return null;
 
-    // Ask for optional model override
     const useCustomModel = await confirm({
       message: "Use a custom model for this agent?",
       initialValue: false,
@@ -432,8 +294,8 @@ async function buildCustomWorkflow() {
     let model: string | undefined;
     if (!isCancel(useCustomModel) && useCustomModel) {
       const modelInput = await text({
-        message: "Model ID (e.g. anthropic/claude-sonnet-4.5)",
-        initialValue: "openrouter/owl-alpha",
+        message: "Model ID (e.g., anthropic/claude-opus-4)",
+        initialValue: "anthropic/claude-opus-4",
       });
       if (isCancel(modelInput)) return null;
       model = modelInput.trim() || undefined;
@@ -469,26 +331,14 @@ async function buildCustomWorkflow() {
     return null;
   }
 
-  // Select orchestration strategy
+  // Strategy selection
   const strategy = await select({
-    message: "Select orchestration strategy",
+    message: "Orchestration strategy?",
     options: [
-      {
-        value: "sequential",
-        label: "Sequential (agents work one after another)",
-      },
-      {
-        value: "parallel",
-        label: "Parallel (agents work simultaneously)",
-      },
-      {
-        value: "hierarchical",
-        label: "Hierarchical (coordinator delegates)",
-      },
-      {
-        value: "collaborative",
-        label: "Collaborative (agents communicate)",
-      },
+      { value: "sequential", label: "Sequential (one after another)" },
+      { value: "parallel", label: "Parallel (simultaneous with limits)" },
+      { value: "hierarchical", label: "Hierarchical (coordinator delegates)" },
+      { value: "collaborative", label: "Collaborative (agents communicate)" },
     ],
   });
 
@@ -499,35 +349,117 @@ async function buildCustomWorkflow() {
       builder.withSequentialStrategy();
       break;
     case "parallel":
-      builder.withParallelStrategy(3, 30000);
+      builder.withParallelStrategy(3, 30_000);
       break;
     case "hierarchical":
       builder.withHierarchicalStrategy();
       break;
     case "collaborative":
-      builder.withCollaborativeStrategy(60000);
+      builder.withCollaborativeStrategy(60_000);
       break;
   }
 
-  // Optional: enable retry
-  const enableRetry = await select({
+  // Retry option
+  const enableRetry = await confirm({
     message: "Enable retry on failure?",
-    options: [
-      { value: "yes", label: "Yes, retry up to 2 times" },
-      { value: "no", label: "No, fail fast" },
-    ],
+    initialValue: true,
   });
 
-  if (!isCancel(enableRetry) && enableRetry === "yes") {
+  if (!isCancel(enableRetry) && enableRetry) {
     builder.withRetryOnFailure(2);
   }
 
   return builder.build();
 }
 
-/**
- * Let user select tools for a custom agent
- */
+// ─── Advanced DAG Workflow Builder ──────────────────────────────────────────
+
+async function buildAdvancedDAGWorkflow(): Promise<MultiAgentWorkflow | null> {
+  const goal = await text({
+    message: "What is the goal of this complex workflow?",
+  });
+
+  if (isCancel(goal) || !goal.trim()) return null;
+
+  const timestamp = Date.now();
+  const builder = new WorkflowBuilder(`workflow_dag_${timestamp}`, goal.trim());
+
+  const agents = new Map<string, string>();
+  let agentCount = 0;
+
+  // Build a pool of available agents first
+  let addingAgents = true;
+  while (addingAgents && agentCount < 15) {
+    const agentType = await select({
+      message: `Agent #${agentCount + 1}?`,
+      options: [
+        { value: "researcher", label: "Researcher" },
+        { value: "implementer", label: "Implementer" },
+        { value: "reviewer", label: "Reviewer" },
+        { value: "coordinator", label: "Coordinator" },
+        { value: "done", label: "Done adding agents" },
+      ],
+    });
+
+    if (isCancel(agentType)) return null;
+    if (agentType === "done") break;
+
+    const name = await text({
+      message: "Agent name",
+      initialValue: `${agentType}_${agentCount + 1}`,
+    });
+
+    if (isCancel(name)) return null;
+
+    agents.set(name, agentType);
+    agentCount++;
+  }
+
+  if (agents.size === 0) return null;
+
+  // Now let user specify dependencies
+  for (const [agentName, agentType] of agents) {
+    const dependsOnRaw = await multiselect({
+      message: `${chalk.bold(agentName)}: depends on? (empty = root)`,
+      options: Array.from(agents.keys())
+        .filter((n) => n !== agentName)
+        .map((n) => ({ label: n, value: n })),
+    });
+
+    if (isCancel(dependsOnRaw)) return null;
+
+    const deps = dependsOnRaw as string[];
+    const description = await text({
+      message: `${agentName}: What does it do?`,
+    });
+
+    if (isCancel(description)) return null;
+
+    const options = deps.length > 0 ? { dependsOn: deps } : undefined;
+
+    switch (agentType) {
+      case "researcher":
+        builder.addResearcher(agentName, agentName, description, options);
+        break;
+      case "implementer":
+        builder.addImplementer(agentName, agentName, description, options);
+        break;
+      case "reviewer":
+        builder.addReviewer(agentName, agentName, description, options);
+        break;
+      case "coordinator":
+        builder.addCoordinator(agentName, agentName, description, options);
+        break;
+    }
+  }
+
+  builder.withDagStrategy(3, 120_000).withRetryOnFailure(1);
+
+  return builder.build();
+}
+
+// ─── Tools Selection ──────────────────────────────────────────────────────
+
 async function selectCustomTools(): Promise<string[] | null> {
   const availableTools = [
     "read_file",
@@ -564,10 +496,7 @@ async function selectCustomTools(): Promise<string[] | null> {
     "read_skill",
   ];
 
-  const selected: string[] = [];
-
-  // Always include read_file as a base tool
-  selected.push("read_file");
+  const selected: string[] = ["read_file"];
 
   let addingTools = true;
   while (addingTools) {
@@ -575,22 +504,15 @@ async function selectCustomTools(): Promise<string[] | null> {
     if (remaining.length === 0) break;
 
     const tool = await select({
-      message: `Add tool #${selected.length + 1}?`,
+      message: `Tool #${selected.length}?`,
       options: [
-        ...remaining.slice(0, 15).map((t) => ({
-          value: t,
-          label: t,
-        })),
-        { value: "done", label: "Done adding tools" },
+        ...remaining.slice(0, 15).map((t) => ({ value: t, label: t })),
+        { value: "done", label: "Done" },
       ],
     });
 
     if (isCancel(tool)) return null;
-
-    if (tool === "done") {
-      addingTools = false;
-      break;
-    }
+    if (tool === "done") break;
 
     selected.push(tool);
   }
@@ -598,93 +520,189 @@ async function selectCustomTools(): Promise<string[] | null> {
   return selected;
 }
 
-/**
- * Display execution results with detailed breakdown
- */
+// ─── Display & Approval ────────────────────────────────────────────────────
+
+function displayWorkflowSummary(workflow: MultiAgentWorkflow): void {
+  console.log(chalk.bold("\n📋 Workflow Configuration\n"));
+  console.log(`Goal: ${workflow.goal}`);
+  console.log(`Strategy: ${chalk.cyan(workflow.strategy.type)}`);
+  console.log(`Agents: ${workflow.agents.length}`);
+  console.log(
+    `${workflow.agents
+      .map(
+        (a) =>
+          `  • ${chalk.bold(a.name)} (${a.role})${a.model ? ` [${chalk.dim(a.model)}]` : ""}${
+            a.dependsOn?.length ? ` → depends: ${a.dependsOn.join(", ")}` : ""
+          }`,
+      )
+      .join("\n")}`,
+  );
+  console.log();
+}
+
+async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): Promise<void> {
+  const trackers = orchestrator.getAllTrackers();
+  const executors = orchestrator.getAllExecutors();
+
+  let totalPending = 0;
+  for (const [, tracker] of trackers) {
+    totalPending += tracker.getPendingMutations().length;
+  }
+
+  if (totalPending === 0) {
+    console.log(chalk.dim("\nNo staged changes to review.\n"));
+    return;
+  }
+
+  console.log(chalk.bold(`\n📝 ${totalPending} staged change(s) from ${trackers.size} agent(s)\n`));
+
+  const choice = await select({
+    message: "Apply staged changes?",
+    options: [
+      { value: "all", label: "Approve all" },
+      { value: "select", label: "Review one by one" },
+      { value: "cancel", label: "Discard all" },
+    ],
+  });
+
+  if (isCancel(choice) || choice === "cancel") {
+    for (const [, tracker] of trackers) {
+      for (const action of tracker.getPendingMutations()) {
+        tracker.updateStatus(action.id, "rejected", false);
+      }
+    }
+    for (const [, executor] of executors) {
+      executor.discardChanges();
+    }
+    console.log(chalk.yellow("\nAll changes discarded.\n"));
+    return;
+  }
+
+  if (choice === "all") {
+    for (const [, tracker] of trackers) {
+      for (const action of tracker.getPendingMutations()) {
+        tracker.updateStatus(action.id, "approved", true);
+      }
+    }
+  } else if (choice === "select") {
+    for (const [agentId, tracker] of trackers) {
+      const pending = tracker.getPendingMutations();
+      if (pending.length === 0) continue;
+
+      console.log(chalk.bold(`\n🤖 Agent: ${agentId} (${pending.length} change(s))`));
+
+      const groups = groupPendingByAgent(agentId, pending);
+
+      for (const g of groups) {
+        while (true) {
+          const opt = await select({
+            message: chalk.bold(g.label),
+            options: [
+              { value: "accept", label: "Accept" },
+              { value: "diff", label: "Show diff", hint: g.patch ? "" : "N/A" },
+              { value: "reject", label: "Reject" },
+            ],
+          });
+
+          if (isCancel(opt)) {
+            for (const [, t] of trackers) {
+              for (const a of t.getPendingMutations()) {
+                t.updateStatus(a.id, "rejected", false);
+              }
+            }
+            for (const [, executor] of executors) {
+              executor.discardChanges();
+            }
+            console.log(chalk.yellow("\nAll changes discarded.\n"));
+            return;
+          }
+
+          if (opt === "diff") {
+            if (g.patch) {
+              console.log("\n" + renderTerminalMarkdown("```diff\n" + g.patch + "\n```\n") + "\n");
+            }
+            continue;
+          }
+
+          for (const id of g.actionIds) {
+            tracker.updateStatus(id, opt === "accept" ? "approved" : "rejected", opt === "accept");
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  await withSpinner(
+    {
+      message: "Applying approved changes…",
+      doneMessage: "all changes applied",
+      failMessage: "some operations failed",
+    },
+    async () => {
+      const allErrors: string[] = [];
+      for (const [agentId, executor] of executors) {
+        const { errors } = executor.applyApprovedFromTracker();
+        allErrors.push(...errors.map((e) => `[${agentId}] ${e}`));
+      }
+
+      if (allErrors.length > 0) {
+        console.log(chalk.red("\nErrors:\n"));
+        for (const e of allErrors) {
+          console.log(chalk.red(`  · ${e}`));
+        }
+      } else {
+        console.log(chalk.green("\n✔ All changes applied.\n"));
+      }
+    },
+  );
+}
+
 function displayExecutionResults(orchestrator: MultiAgentOrchestrator): void {
   const summary = orchestrator.getSummary();
 
   console.log(chalk.bold("\n📊 Execution Summary\n"));
 
-  // Basic stats
-  const statusColor =
-    summary.status === "completed" ? chalk.green : chalk.red;
+  const statusColor = summary.status === "completed" ? chalk.green : chalk.red;
   const statusIcon = summary.status === "completed" ? "✓" : "✗";
   console.log(`Status: ${statusColor(`${statusIcon} ${summary.status}`)}`);
   console.log(`Strategy: ${summary.strategy}`);
-  console.log(
-    `Duration: ${summary.duration ? `${summary.duration}ms` : "Still running"}`,
-  );
+  console.log(`Duration: ${summary.duration ? `${summary.duration}ms` : "N/A"}`);
 
-  // Pool stats
-  console.log(chalk.bold("\n🤖 Agent Pool Stats\n"));
-  console.log(`Total Agents: ${summary.poolStats.totalAgents}`);
-  console.log(`Active: ${summary.poolStats.activeAgents}`);
-  console.log(`Waiting: ${summary.poolStats.waitingAgents}`);
+  console.log(chalk.bold("\n🤖 Pool Stats\n"));
+  console.log(`Total: ${summary.poolStats.totalAgents}`);
+  console.log(`Completed: ${chalk.green(String(summary.poolStats.completedAgents))}`);
   console.log(`Failed: ${chalk.red(String(summary.poolStats.failedAgents))}`);
-  console.log(
-    `Overall Completion: ${chalk.cyan(`${summary.poolStats.completionPercentage}%`)}`,
-  );
+  console.log(`Overall: ${chalk.cyan(`${summary.poolStats.completionPercentage}%`)}`);
 
-  // Agent execution results
-  console.log(chalk.bold("\n🔍 Agent Execution Results\n"));
+  console.log(chalk.bold("\n🔍 Agent Results\n"));
   for (const result of summary.executionResults) {
     const icon = result.success ? chalk.green("✓") : chalk.red("✗");
     const role = chalk.dim(`(${result.role})`);
     console.log(`${icon} ${chalk.bold(result.agentId)} ${role}`);
-    console.log(`   Steps: ${result.steps}`);
-  }
-
-  // Task tracking
-  console.log(chalk.bold("\n✅ Task Tracking\n"));
-  console.log(
-    `Completed Tasks: ${chalk.green(String(summary.completedTasks))}`,
-  );
-  console.log(`Failed Tasks: ${chalk.red(String(summary.failedTasks))}`);
-
-  // Detailed timeline
-  const timeline = orchestrator.getTimeline();
-  if (timeline.length > 0) {
-    console.log(chalk.bold("\n📈 Detailed Timeline\n"));
-    for (const entry of timeline) {
-      const status = entry.success
-        ? chalk.green("Success")
-        : chalk.red("Failed");
-      console.log(`[${entry.agentId}] ${status}`);
-
-      if (entry.output) {
-        const preview = entry.output.slice(0, 200);
-        console.log(chalk.dim(`  Output: ${preview}...`));
-      }
-
-      if (entry.executedTools.length > 0) {
-        console.log(chalk.dim(`  Tools: ${entry.executedTools.join(", ")}`));
-      }
-
-      if (entry.error) {
-        console.log(chalk.red(`  Error: ${entry.error.message}`));
-      }
+    console.log(`   Steps: ${result.steps}, Duration: ${result.durationMs}ms, Attempt: ${result.attemptNumber}`);
+    if (result.toolsUsed.length > 0) {
+      console.log(`   Tools: ${result.toolsUsed.join(", ")}`);
     }
   }
 
-  // Message history (if collaborative)
-  const messages = orchestrator.getMessageHistory();
-  if (messages.length > 0) {
-    console.log(chalk.bold("\n💬 Agent Communications\n"));
-    for (const msg of messages.slice(-3)) {
-      const target = msg.toAgentId ? `→ ${msg.toAgentId}` : "→ all";
-      console.log(`${chalk.cyan(msg.fromAgentId)} ${target}: ${msg.type}`);
-      console.log(chalk.dim(`  ${msg.content.slice(0, 100)}...`));
-    }
-  }
+  console.log(chalk.bold("\n✅ Tasks\n"));
+  console.log(`Completed: ${chalk.green(String(summary.completedTasks))}`);
+  console.log(`Failed: ${chalk.red(String(summary.failedTasks))}`);
 }
 
-/**
- * Export for main application integration
- */
+// ─── Simple Logger ─────────────────────────────────────────────────────────
+
+const orchestrationLogger = {
+  debug: (msg: string) => {
+    if (process.env.DEBUG) console.log(chalk.dim(`[DEBUG] ${msg}`));
+  },
+};
+
 export default {
   runMultiAgentMode,
-  selectTemplate,
+  selectTemplateWorkflow,
   buildCustomWorkflow,
+  buildAdvancedDAGWorkflow,
   displayExecutionResults,
 };
