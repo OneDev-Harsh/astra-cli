@@ -77,13 +77,14 @@ export async function endSession(
 
   const summary = await summariseSession(actions, agentResponse);
 
+  // FIXED: Added 'actions' as the 3rd parameter here to persist them to disk
   updateSession(sessionId, {
     summary,
     touchedFiles,
     appliedActions,
     rejectedActions,
     status: "completed",
-  });
+  }, actions); 
 }
 
 /**
@@ -111,17 +112,18 @@ export async function endMultiSession(
     if (response) responses.push(response);
   }
 
-  const touchedFiles = [...new Set(allTouchedFiles)];
+const touchedFiles = [...new Set(allTouchedFiles)];
   const allActions = [...trackers.values()].flatMap((t) => t.tracker.getActions());
   const summary = await summariseSession(allActions, responses.join("\n\n"));
 
+  // FIXED: Added 'allActions' as the 3rd parameter here
   updateSession(sessionId, {
     summary,
     touchedFiles,
     appliedActions: totalApplied,
     rejectedActions: totalRejected,
     status: "completed",
-  });
+  }, allActions);
 }
 
 /**

@@ -14,14 +14,16 @@ import {
     endSession,
     markSessionInterrupted,
     formatSessionLine,
+    readSessionActions, // Added history loading endpoint hook
 } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
 
-export async function runAgentMode() {
+export async function runAgentMode(preCapturedGoal?: string) {
     console.log(chalk.bold("\n  Agent mode\n"));
 
-    const goal = await text({
+    // If Auto Mode already collected the goal, skip the prompt
+    const goal = preCapturedGoal ?? await text({
         message: "What would you like the agent to do for you?",
         placeholder: "Concrete task for this codebase...",
     });
@@ -66,8 +68,13 @@ export async function runAgentMode() {
         resumeSessionId: resumeId,
     });
 
-    if (contextSummary) {
-        console.log(chalk.dim("\n  Resuming previous session context.\n"));
+    if (resumeId) {
+        console.log(chalk.dim("\n  Resuming previous session transaction history...\n"));
+        const historicActions = readSessionActions(resumeId);
+        if (historicActions.length > 0) {
+            // Re-hydrate the staging environment so it perfectly recreates uncommitted buffers
+            executor.hydrateFromActions(historicActions);
+        }
     }
 
     const tools = {
@@ -82,6 +89,7 @@ export async function runAgentMode() {
               contextSummary,
               `Workspace root: ${config.codebasePath}`,
               "All mutations are staged until approval.",
+              "You have access to historical state updates loaded in the overlay loop.",
           ].join("\n")
         : [
               `Workspace root: ${config.codebasePath}`,
@@ -134,13 +142,13 @@ export async function runAgentMode() {
                     backoffMultiplier: 2,
                     jitter: true,
                     maxJitterMs: 1000,
-                },
+                    version: 1,
+                } as any,
                 showProgress: retryConfig.showProgress,
                 askBeforeRetry: false,
             },
         );
     } catch (error) {
-        // All automatic retries exhausted — offer manual retry as last resort
         const manualRetry = await promptToRetryAiCall(
             "Automatic retries exhausted. Would you like to try once more?",
             error,

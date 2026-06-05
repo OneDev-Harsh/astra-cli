@@ -1,10 +1,11 @@
 import fs from "fs";
 import path from "path";
 import { getConfigDir } from "../ai/config-loader";
+import type { ActionLog } from "../modes/agent/types"; // Adjust path if types is located elsewhere
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type SessionMode = "agent" | "ask" | "plan" | "multi";
+export type SessionMode = "agent" | "ask" | "plan" | "multi" | "auto";
 export type SessionStatus = "active" | "completed" | "interrupted";
 
 export interface SessionEntry {
@@ -63,8 +64,9 @@ function now(): string {
 /**
  * Atomic write: write to a temp file, then rename.
  * Prevents corruption if the process crashes mid-write.
- */
+ * */
 function atomicWrite(filePath: string, data: string): void {
+  ensureStoreDir();
   const tmp = `${filePath}.tmp_${process.pid}_${Date.now()}`;
   fs.writeFileSync(tmp, data, "utf8");
   fs.renameSync(tmp, filePath);
@@ -89,7 +91,6 @@ function readIndex(): SessionStoreIndex {
 }
 
 function writeIndex(index: SessionStoreIndex): void {
-  ensureStoreDir();
   atomicWrite(INDEX_FILE, JSON.stringify(index, null, 2));
 }
 
@@ -113,6 +114,17 @@ export function listSessions(
 export function getSession(id: string): SessionEntry | undefined {
   const index = readIndex();
   return index.sessions.find((s) => s.id === id);
+}
+
+/** Retrieves the raw history logs along with the session state entry */
+export function getSessionHistory(id: string): ActionLog[] {
+  const historyFile = path.join(STORE_DIR, `${id}.json`);
+  if (!fs.existsSync(historyFile)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(historyFile, "utf8")) as ActionLog[];
+  } catch {
+    return [];
+  }
 }
 
 export function getMostRecentSession(
@@ -157,7 +169,8 @@ export function createSession(input: {
 
 export function updateSession(
   id: string,
-  patch: Partial<Omit<SessionEntry, "id" | "createdAt">>
+  patch: Partial<Omit<SessionEntry, "id" | "createdAt">>,
+  actions?: readonly ActionLog[] // Added 'readonly' here
 ): SessionEntry | undefined {
   const index = readIndex();
   const entry = index.sessions.find((s) => s.id === id);
@@ -165,6 +178,12 @@ export function updateSession(
 
   Object.assign(entry, patch, { updatedAt: now() });
   writeIndex(index);
+
+  if (actions) {
+    const historyFile = path.join(STORE_DIR, `${id}.json`);
+    atomicWrite(historyFile, JSON.stringify(actions, null, 2));
+  }
+
   return entry;
 }
 
@@ -187,4 +206,15 @@ export function clearAllSessions(): number {
   }
   writeIndex({ version: CURRENT_VERSION, sessions: [], maxSessions: MAX_SESSIONS });
   return count;
+}
+
+export function readSessionActions(id: string): ActionLog[] {
+  const historyFile = path.join(STORE_DIR, `${id}.json`);
+  if (!fs.existsSync(historyFile)) return [];
+  try {
+    const text = fs.readFileSync(historyFile, "utf8");
+    return JSON.parse(text);
+  } catch {
+    return [];
+  }
 }

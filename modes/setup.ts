@@ -1,11 +1,25 @@
 import chalk from "chalk";
-import { intro, outro, text, confirm, isCancel } from "@clack/prompts";
+import { intro, outro, text, confirm, isCancel, autocomplete } from "@clack/prompts";
 import {
   getEnv,
   getConfigPath,
-  getConfigDir,
   saveConfig,
 } from "../ai/config-loader";
+import { withSpinner } from "../tui/spinner"; // Adjust path as necessary
+
+// 1. Updated interface to include OpenRouter's exact pricing object structure
+interface OpenRouterModel {
+  id: string;
+  name: string;
+  architecture?: {
+    modality?: string;
+    output_modalities?: string[];
+  };
+  pricing?: {
+    prompt: string;      // Price per individual token
+    completion: string;  // Price per individual token
+  };
+}
 
 export async function runSetup(): Promise<void> {
   intro(chalk.bold("astra setup"));
@@ -42,24 +56,102 @@ export async function runSetup(): Promise<void> {
     apiKey = val.trim();
   }
 
-  // ── Default Model ───────────────────────────────────────────────
+  // ── Fetching All OpenRouter Models Dynamically ───────────────────
+  let modelOptions: Array<{ value: string; label: string; hint?: string }> = [];
+
   const setModel = await confirm({
     message: "Set default OpenRouter model?",
     initialValue: !currentModel,
   });
   if (isCancel(setModel)) return outro(chalk.dim("Setup cancelled."));
 
-  let modelId = currentModel;
   if (setModel) {
-    const val = await text({
-      message: "Default model ID",
-      placeholder: "anthropic/claude-sonnet-4.5",
-      initialValue: currentModel || "anthropic/claude-sonnet-4.5",
-      validate: (v) =>
-        (v ?? "").trim() ? undefined : "Model ID is required",
-    });
-    if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
-    modelId = val.trim();
+    try {
+      modelOptions = await withSpinner(
+        {
+          message: "Fetching all available OpenRouter models & pricing...",
+          doneMessage: "Loaded models successfully.",
+          failMessage: "Failed to fetch dynamic list. Dropping back to fallback entry.",
+        },
+        async () => {
+          const response = await fetch("https://openrouter.ai/api/v1/models");
+          if (!response.ok) throw new Error("Failed to communicate with OpenRouter registry");
+          
+          const json = (await response.json()) as { data: OpenRouterModel[] };
+          
+          return json.data
+            .filter((model) => {
+              const outModalities = model.architecture?.output_modalities;
+              const modalityStr = model.architecture?.modality || "";
+              
+              if (outModalities) return outModalities.includes("text");
+              if (modalityStr) return modalityStr.endsWith("->text");
+              
+              return true;
+            })
+            .map((model) => {
+              const provider = model.id.split("/")[0];
+              
+              // Convert price-per-token strings to a clean price per 1 Million tokens
+              const promptPriceNum = parseFloat(model.pricing?.prompt || "0") * 1_000_000;
+              const completionPriceNum = parseFloat(model.pricing?.completion || "0") * 1_000_000;
+
+              let pricingHint = "Free";
+              if (promptPriceNum > 0 || completionPriceNum > 0) {
+                pricingHint = `In: $${promptPriceNum.toFixed(2)}, Out: $${completionPriceNum.toFixed(2)} /1M`;
+              }
+
+              return {
+                value: model.id,
+                label: model.name || model.id,
+                hint: `${provider} (${pricingHint})`,
+              };
+            });
+        }
+      );
+    } catch (error) {
+      modelOptions = []; 
+    }
+
+    let modelId = currentModel;
+
+    if (modelOptions.length > 0) {
+      const selectedModel = await autocomplete({
+        message: "Select an OpenRouter text model (Type to search & compare pricing)",
+        options: [
+          ...modelOptions,
+          { value: "custom", label: "Custom Entry...", hint: "Type manual ID" }
+        ],
+        placeholder: "Search e.g. 'claude', 'gpt', 'llama'...",
+      });
+      if (isCancel(selectedModel)) return outro(chalk.dim("Setup cancelled."));
+
+      if (selectedModel === "custom") {
+        const customVal = await text({
+          message: "Enter custom OpenRouter Model ID",
+          placeholder: "provider/model-name",
+          initialValue: currentModel,
+          validate: (v) => ((v ?? "").trim() ? undefined : "Model ID is required"),
+        });
+        if (isCancel(customVal)) return outro(chalk.dim("Setup cancelled."));
+        modelId = customVal.trim();
+      } else {
+        modelId = selectedModel as string;
+      }
+    } else {
+      const fallbackVal = await text({
+        message: "Enter OpenRouter Model ID",
+        placeholder: "anthropic/claude-3.5-sonnet",
+        initialValue: currentModel || "anthropic/claude-3.5-sonnet",
+        validate: (v) => ((v ?? "").trim() ? undefined : "Model ID is required"),
+      });
+      if (isCancel(fallbackVal)) return outro(chalk.dim("Setup cancelled."));
+      modelId = fallbackVal.trim();
+    }
+    
+    var finalModelId = modelId;
+  } else {
+    var finalModelId = currentModel;
   }
 
   // ── Firecrawl API Key (optional) ────────────────────────────────
@@ -75,7 +167,7 @@ export async function runSetup(): Promise<void> {
       message: "Firecrawl API key",
       placeholder: "fc-...",
       initialValue: currentFirecrawl,
-      validate: (_v) => undefined, // optional field, empty is fine
+      validate: (_v) => undefined,
     });
     if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
     firecrawlKey = (val ?? "").trim();
@@ -94,7 +186,7 @@ export async function runSetup(): Promise<void> {
       message: "Skills directories (semicolon-separated)",
       placeholder: "/path/to/skills;/another/dir",
       initialValue: currentSkillsDirs,
-      validate: (_v) => undefined, // optional field, empty is fine
+      validate: (_v) => undefined,
     });
     if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
     skillsDirs = (val ?? "").trim();
@@ -103,7 +195,7 @@ export async function runSetup(): Promise<void> {
   // ── Save ────────────────────────────────────────────────────────
   const entries: Record<string, string> = {};
   if (apiKey) entries.OPENROUTER_API_KEY = apiKey;
-  if (modelId) entries.OPENROUTER_DEFAULT_MODEL = modelId;
+  if (finalModelId) entries.OPENROUTER_DEFAULT_MODEL = finalModelId;
   if (firecrawlKey) entries.FIRECRAWL_API_KEY = firecrawlKey;
   if (skillsDirs) entries.SKILLS_DIRS = skillsDirs;
 
@@ -112,7 +204,7 @@ export async function runSetup(): Promise<void> {
   outro(
     chalk.green(
       `\n✔ Configuration saved to ${getConfigPath()}\n` +
-        `  You can now run "astra wakeup" to get started.\n`
+        `    You can now run "astra wakeup" to get started.\n`
     )
   );
 }

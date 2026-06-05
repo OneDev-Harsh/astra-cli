@@ -4,12 +4,14 @@ import { runAgentMode } from "./agent/orchestrator";
 import { runAskMode } from "./ask/orchestrator";
 import { runPlanMode } from "./plan/orchestrator";
 import { runMultiAgentMode } from "./multi/orchestrator";
+import { runAutoMode } from "./auto";
 
 export async function runCliMode () {
     while(true){
         const mode = await select({
             message: "Choose CLI mode:",
             options: [
+                {value: "auto", label:"Auto Mode"},
                 {value: "agent", label:"Agent Mode"},
                 {value: "plan", label:"Plan Mode"},
                 {value: "ask", label:"Ask Mode"},
@@ -31,7 +33,10 @@ export async function runCliMode () {
         else if(mode==="multi"){
             await runMultiAgentMode()
         }
-        if(mode!=="agent" && mode!=="plan" && mode!=="ask" && mode!=="multi"){
+        else if(mode==="auto"){
+            await runAutoMode()
+        }
+        if(mode!=="agent" && mode!=="plan" && mode!=="ask" && mode!=="multi" && mode!="auto"){
             console.log(chalk.yellow('\n This mode is not implemented yet. \n'))
         }
     }

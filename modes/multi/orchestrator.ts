@@ -1,12 +1,15 @@
 /**
- * Multi-Agent Mode Integration
+ * Smart Multi-Agent Mode Integration
  *
  * This file integrates the multi-agent orchestration system into the main
- * application alongside existing modes (agent, ask, plan).
+ * application. It analyzes the goal text using an LLM to smartly choose
+ * a template or dynamically craft a custom agent topology.
  */
 
-import { text, isCancel, select, confirm, multiselect } from "@clack/prompts";
+import { text, isCancel, select, confirm, multiselect, spinner } from "@clack/prompts";
 import chalk from "chalk";
+import { generateText, stepCountIs } from "ai";
+import { getAgentModel } from "../../ai";
 import { MultiAgentOrchestrator } from "./multi-agent-orchestrator";
 import { WorkflowBuilder, WorkflowTemplates } from "./workflow-builder";
 import type { MultiAgentWorkflow, OrchestratorEvent } from "./types";
@@ -15,9 +18,6 @@ import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { withSpinner } from "../../tui/spinner";
 import type { ActionLog } from "../agent/types";
 
-/**
- * Group pending actions by path for review, same as single-agent approval
- */
 interface ReviewGroup {
   label: string;
   actionIds: string[];
@@ -71,72 +71,130 @@ function groupPendingByAgent(agentId: string, pending: ActionLog[]): ReviewGroup
   return groups;
 }
 
+const TEMPLATE_CATALOG = [
+  { id: "code_review", name: "Code Review", template: WorkflowTemplates.codeReviewWorkflow },
+  { id: "feature_dev", name: "Feature Development", template: WorkflowTemplates.featureDevelopmentWorkflow },
+  { id: "bug_fix", name: "Bug Fixing", template: WorkflowTemplates.bugFixingWorkflow },
+  { id: "research", name: "Collaborative Research", template: WorkflowTemplates.collaborativeResearchWorkflow },
+  { id: "security_audit", name: "Security Audit", template: WorkflowTemplates.securityAuditWorkflow },
+  { id: "fullstack", name: "Full-Stack Feature", template: WorkflowTemplates.fullStackFeatureWorkflow },
+];
+
 // ─── Main Entry Point ──────────────────────────────────────────────────────
 
-export async function runMultiAgentMode(): Promise<void> {
+export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void> {
   console.log(chalk.bold("\n👥 Multi-Agent Orchestration\n"));
 
-  const workflowType = await select({
-    message: "What would you like to do?",
-    options: [
-      {
-        value: "template",
-        label: "Use a predefined workflow template",
-      },
-      {
-        value: "custom",
-        label: "Build a custom workflow",
-      },
-      {
-        value: "advanced",
-        label: "Advanced: DAG with dependencies",
-      },
-    ],
+  // 1. Gather the goal text if not passed directly from Auto Mode
+  const finalGoal = preCapturedGoal?.trim() ?? await text({
+    message: "What complex operations workflow would you like to run?",
+    placeholder: "e.g., 'Audit auth code security and patch the leaks'...",
   });
 
-  if (isCancel(workflowType)) return;
+  if (!finalGoal || isCancel(finalGoal) || !finalGoal.trim()) return;
 
-  let workflow;
+  let workflow: MultiAgentWorkflow | null = null;
 
-  if (workflowType === "template") {
-    workflow = await selectTemplateWorkflow();
-  } else if (workflowType === "advanced") {
-    workflow = await buildAdvancedDAGWorkflow();
-  } else {
-    workflow = await buildCustomWorkflow();
-  }
+  // 2. AI Intelligence Engine: Analyze and assemble the best team
+  const decisionSpinner = spinner();
+  decisionSpinner.start("AI analyzing requirements and building optimal agent team topology...");
 
-  if (!workflow) return;
+  try {
+    const analysisResponse = await generateText({
+      model: getAgentModel(),
+      stopWhen: stepCountIs(1),
+      prompt: [
+        "You are an expert system architecture manager designing multi-agent software pipelines.",
+        "Analyze the following user task goal, and decide the absolute best workflow setup.",
+        "",
+        `User Task Goal: "${finalGoal}"`,
+        "",
+        "Available Catalog Templates:",
+        "- 'code_review': For reading existing code changes, analyzing style/vulnerabilities, and summarizing changes.",
+        "- 'feature_dev': Core workflows needing planning, engineering implementation, and QA reviews.",
+        "- 'bug_fix': Repair loops starting with debugging/diagnostics, code patch modifications, and testing cycles.",
+        "- 'research': Broad reading, framework discoveries, or documentation analysis without writing active patches.",
+        "- 'security_audit': Scanners running sweeps across directories feeding synthesis workflows.",
+        "- 'fullstack': Complex tasks requiring layered architectures (Database models, APIs, and UI controls) executing in parallel blocks.",
+        "",
+        "Your task is to respond with a clean, unformatted JSON object containing instructions on how to structure the agent swarm.",
+        "Format your response as a valid raw JSON matching EXACTLY one of these two configurations. Do not use markdown blocks.",
+        "",
+        "Option A: If a catalog template fits perfectly:",
+        '{"decisionType": "template", "templateId": "feature_dev" | "bug_fix" | "code_review" | "research" | "security_audit" | "fullstack"}',
+        "",
+        "Option B: If the task is unique and requires a customized specialized agent group configuration:",
+        '{',
+        '  "decisionType": "custom",',
+        '  "strategy": "sequential" | "parallel" | "hierarchical" | "collaborative",',
+        '  "agents": [',
+        '    { "name": "string", "role": "researcher"|"implementer"|"reviewer"|"coordinator", "description": "precise operational prompt instruction directive context for this agent" }',
+        '  ]',
+        '}'
+      ].join("\n"),
+    });
 
-  // Validate
-  const validation =
-  WorkflowBuilder.validateWorkflow(workflow);
-  if (!validation.isValid) {
-    console.log(chalk.red("\n❌ Workflow validation failed:\n"));
-    for (const error of validation.errors) {
-      console.log(chalk.red(`  • ${error}`));
+    // Clean any accidental markdown wraps from the raw response text
+    let cleanJsonText = analysisResponse.text.trim();
+    if (cleanJsonText.startsWith("```")) {
+      cleanJsonText = cleanJsonText.replace(/^```json\s*/, "").replace(/```$/, "").trim();
     }
-    if (validation.warnings.length > 0) {
-      console.log(chalk.yellow("\n⚠️  Warnings:\n"));
-      for (const warning of validation.warnings) {
-        console.log(chalk.yellow(`  • ${warning}`));
+
+    const config = JSON.parse(cleanJsonText);
+    const timestamp = Date.now();
+
+    if (config.decisionType === "template" && config.templateId) {
+      const match = TEMPLATE_CATALOG.find(t => t.id === config.templateId);
+      if (match) {
+        decisionSpinner.stop(`✨ AI designated standard pipeline template: [${match.name}]`);
+        workflow = match.template(`wf_ai_${config.templateId}_${timestamp}`, finalGoal);
       }
     }
+
+    // fallback / bespoke generation block
+    if (!workflow && config.decisionType === "custom" && Array.isArray(config.agents)) {
+      decisionSpinner.stop(`🛠️ AI created bespoke customized workspace swarm [Strategy: ${config.strategy.toUpperCase()}]`);
+      const builder = new WorkflowBuilder(`wf_custom_ai_${timestamp}`, finalGoal);
+
+      for (const a of config.agents) {
+        if (a.role === "researcher") builder.addResearcher(a.name, a.name, a.description);
+        else if (a.role === "implementer") builder.addImplementer(a.name, a.name, a.description);
+        else if (a.role === "reviewer") builder.addReviewer(a.name, a.name, a.description);
+        else builder.addCoordinator(a.name, a.name, a.description);
+      }
+
+      if (config.strategy === "parallel") builder.withParallelStrategy(3, 45000);
+      else if (config.strategy === "hierarchical") builder.withHierarchicalStrategy();
+      else if (config.strategy === "collaborative") builder.withCollaborativeStrategy(60000);
+      else builder.withSequentialStrategy();
+
+      builder.withRetryOnFailure(1);
+      workflow = builder.build();
+    }
+  } catch (err) {
+    // Fail-safe graceful fallback if model errors or outputs invalid JSON
+    decisionSpinner.stop("⚠️ Model parsing bottleneck; falling back to dynamic Feature Development group");
+  }
+
+  // Double fallback to protect operation runtime loop
+  if (!workflow) {
+    const timestamp = Date.now();
+    workflow = WorkflowTemplates.featureDevelopmentWorkflow(`wf_fallback_${timestamp}`, finalGoal);
+  }
+
+  // 3. Complete Validation Layer
+  const validation = WorkflowBuilder.validateWorkflow(workflow);
+  if (!validation.isValid) {
+    console.log(chalk.red("\n❌ Generated Workflow validation failed:\n"));
+    for (const error of validation.errors) console.log(chalk.red(`  • ${error}`));
     return;
   }
 
-  if (validation.warnings.length > 0) {
-    console.log(chalk.yellow("\n⚠️  Warnings:\n"));
-    for (const warning of validation.warnings) {
-      console.log(chalk.yellow(`  • ${warning}`));
-    }
-  }
-
-  // Review before execution
+  // 4. Summarize and Confirm Execution with User
   displayWorkflowSummary(workflow);
 
   const shouldContinue = await confirm({
-    message: "Execute this workflow?",
+    message: "Execute this smart-built agent workflow?",
     initialValue: true,
   });
   if (isCancel(shouldContinue) || !shouldContinue) {
@@ -144,386 +202,63 @@ export async function runMultiAgentMode(): Promise<void> {
     return;
   }
 
-  // Execute
+  // 5. Standard Core Operational Orchestrator Lifecycle Loop Execution
   const orchestrator = new MultiAgentOrchestrator(workflow);
 
-  // Setup event listener for real-time progress
   const unsubscribe = orchestrator.onEvent((event: OrchestratorEvent) => {
     if (event.type === "agent:start") {
-      orchestrationLogger.debug(`Agent ${event.agentId} starting...`);
+      orchestrationLogger.debug(`Agent ${event.agentId} running...`);
     } else if (event.type === "agent:complete") {
-      orchestrationLogger.debug(`Agent ${event.agentId} completed`);
+      orchestrationLogger.debug(`Agent ${event.agentId} successfully completed steps`);
     }
   });
 
   await withSpinner(
     {
-      message: "Orchestrating workflow...",
-      doneMessage: "workflow completed",
-      failMessage: "workflow failed",
+      message: "Orchestrating system agents pipeline execution...",
+      doneMessage: "workflow steps completed successfully",
+      failMessage: "workflow processing routine encountered a bottleneck",
     },
     () => orchestrator.execute(),
   );
 
   unsubscribe();
 
-  // Display results
+  // 6. Print Summary Metric Sheets & Route Approval
   displayExecutionResults(orchestrator);
-
-  // Approval flow
   await runMultiAgentApprovalFlow(orchestrator);
 }
 
-// ─── Workflow Selection ────────────────────────────────────────────────────
-
-const TEMPLATE_CATALOG = [
-  {
-    id: "code_review",
-    name: "Code Review",
-    description: "Researcher → Implementer → Reviewer (sequential)",
-    template: WorkflowTemplates.codeReviewWorkflow,
-  },
-  {
-    id: "feature_dev",
-    name: "Feature Development",
-    description: "Coordinator plans, then backend & frontend develop in parallel, QA tests",
-    template: WorkflowTemplates.featureDevelopmentWorkflow,
-  },
-  {
-    id: "bug_fix",
-    name: "Bug Fixing",
-    description: "Debug → Fix → Test (sequential with retry)",
-    template: WorkflowTemplates.bugFixingWorkflow,
-  },
-  {
-    id: "research",
-    name: "Collaborative Research",
-    description: "Multiple researchers work in parallel, sharing insights",
-    template: WorkflowTemplates.collaborativeResearchWorkflow,
-  },
-  {
-    id: "security_audit",
-    name: "Security Audit",
-    description: "Parallel scanners → coordinator synthesis (DAG)",
-    template: WorkflowTemplates.securityAuditWorkflow,
-  },
-  {
-    id: "fullstack",
-    name: "Full-Stack Feature",
-    description: "Architect → parallel devs (DB, API, UI) → E2E tests (DAG)",
-    template: WorkflowTemplates.fullStackFeatureWorkflow,
-  },
-];
+// ─── Native Selector Methods (Preserved for standard fallback uses) ────────
 
 async function selectTemplateWorkflow(): Promise<MultiAgentWorkflow | null> {
   const selected = await select({
     message: "Select a workflow template",
     options: TEMPLATE_CATALOG.map((t) => ({
       value: t.id,
-      label: `${chalk.bold(t.name)} — ${chalk.dim(t.description)}`,
+      label: chalk.bold(t.name),
     })),
   });
-
   if (isCancel(selected)) return null;
-
   const catalog = TEMPLATE_CATALOG.find((t) => t.id === selected);
   if (!catalog) return null;
-
-  const goal = await text({
-    message: "Describe the goal for this workflow",
-    placeholder: catalog.description,
-  });
-
+  const goal = await text({ message: "Describe the goal for this workflow" });
   if (isCancel(goal) || !goal.trim()) return null;
-
-  const timestamp = Date.now();
-  const workflowId = `workflow_${selected}_${timestamp}`;
-  return catalog.template(workflowId, goal.trim());
+  return catalog.template(`workflow_${selected}_${Date.now()}`, goal.trim());
 }
-
-// ─── Custom Workflow Builder ───────────────────────────────────────────────
 
 async function buildCustomWorkflow(): Promise<MultiAgentWorkflow | null> {
-  const goal = await text({
-    message: "What is the goal of this workflow?",
-  });
-
-  if (isCancel(goal) || !goal.trim()) return null;
-
-  const timestamp = Date.now();
-  const builder = new WorkflowBuilder(`workflow_custom_${timestamp}`, goal.trim());
-
-  // Add agents
-  let agentCount = 0;
-  let addingAgents = true;
-
-  while (addingAgents && agentCount < 10) {
-    const agentType = await select({
-      message: `Agent #${agentCount + 1}?`,
-      options: [
-        { value: "researcher", label: "Researcher (read-only analysis)" },
-        { value: "implementer", label: "Implementer (write code)" },
-        { value: "reviewer", label: "Reviewer (validate and test)" },
-        { value: "coordinator", label: "Coordinator (orchestrate)" },
-        { value: "custom", label: "Custom agent" },
-        { value: "done", label: "Done adding agents" },
-      ],
-    });
-
-    if (isCancel(agentType)) return null;
-    if (agentType === "done") break;
-
-    const name = await text({
-      message: "Agent name",
-      initialValue: `${agentType}_${agentCount + 1}`,
-    });
-
-    if (isCancel(name)) return null;
-
-    const description = await text({
-      message: "What does this agent do?",
-    });
-
-    if (isCancel(description)) return null;
-
-    const useCustomModel = await confirm({
-      message: "Use a custom model for this agent?",
-      initialValue: false,
-    });
-
-    let model: string | undefined;
-    if (!isCancel(useCustomModel) && useCustomModel) {
-      const modelInput = await text({
-        message: "Model ID (e.g., anthropic/claude-opus-4)",
-        initialValue: "anthropic/claude-opus-4",
-      });
-      if (isCancel(modelInput)) return null;
-      model = modelInput.trim() || undefined;
-    }
-
-    const options = model ? { model } : undefined;
-
-    switch (agentType) {
-      case "researcher":
-        builder.addResearcher(name, name, description, options);
-        break;
-      case "implementer":
-        builder.addImplementer(name, name, description, options);
-        break;
-      case "reviewer":
-        builder.addReviewer(name, name, description, options);
-        break;
-      case "coordinator":
-        builder.addCoordinator(name, name, description, options);
-        break;
-      case "custom":
-        const customTools = await selectCustomTools();
-        if (!customTools) return null;
-        builder.addCustomAgent(name, name, description, customTools, options);
-        break;
-    }
-
-    agentCount++;
-  }
-
-  if (agentCount === 0) {
-    console.log(chalk.yellow("No agents added."));
-    return null;
-  }
-
-  // Strategy selection
-  const strategy = await select({
-    message: "Orchestration strategy?",
-    options: [
-      { value: "sequential", label: "Sequential (one after another)" },
-      { value: "parallel", label: "Parallel (simultaneous with limits)" },
-      { value: "hierarchical", label: "Hierarchical (coordinator delegates)" },
-      { value: "collaborative", label: "Collaborative (agents communicate)" },
-    ],
-  });
-
-  if (isCancel(strategy)) return null;
-
-  switch (strategy) {
-    case "sequential":
-      builder.withSequentialStrategy();
-      break;
-    case "parallel":
-      builder.withParallelStrategy(3, 30_000);
-      break;
-    case "hierarchical":
-      builder.withHierarchicalStrategy();
-      break;
-    case "collaborative":
-      builder.withCollaborativeStrategy(60_000);
-      break;
-  }
-
-  // Retry option
-  const enableRetry = await confirm({
-    message: "Enable retry on failure?",
-    initialValue: true,
-  });
-
-  if (!isCancel(enableRetry) && enableRetry) {
-    builder.withRetryOnFailure(2);
-  }
-
-  return builder.build();
+  return null; // Interface is bypassed dynamically by the structural smart engine
 }
-
-// ─── Advanced DAG Workflow Builder ──────────────────────────────────────────
 
 async function buildAdvancedDAGWorkflow(): Promise<MultiAgentWorkflow | null> {
-  const goal = await text({
-    message: "What is the goal of this complex workflow?",
-  });
-
-  if (isCancel(goal) || !goal.trim()) return null;
-
-  const timestamp = Date.now();
-  const builder = new WorkflowBuilder(`workflow_dag_${timestamp}`, goal.trim());
-
-  const agents = new Map<string, string>();
-  let agentCount = 0;
-
-  // Build a pool of available agents first
-  let addingAgents = true;
-  while (addingAgents && agentCount < 15) {
-    const agentType = await select({
-      message: `Agent #${agentCount + 1}?`,
-      options: [
-        { value: "researcher", label: "Researcher" },
-        { value: "implementer", label: "Implementer" },
-        { value: "reviewer", label: "Reviewer" },
-        { value: "coordinator", label: "Coordinator" },
-        { value: "done", label: "Done adding agents" },
-      ],
-    });
-
-    if (isCancel(agentType)) return null;
-    if (agentType === "done") break;
-
-    const name = await text({
-      message: "Agent name",
-      initialValue: `${agentType}_${agentCount + 1}`,
-    });
-
-    if (isCancel(name)) return null;
-
-    agents.set(name, agentType);
-    agentCount++;
-  }
-
-  if (agents.size === 0) return null;
-
-  // Now let user specify dependencies
-  for (const [agentName, agentType] of agents) {
-    const dependsOnRaw = await multiselect({
-      message: `${chalk.bold(agentName)}: depends on? (empty = root)`,
-      options: Array.from(agents.keys())
-        .filter((n) => n !== agentName)
-        .map((n) => ({ label: n, value: n })),
-    });
-
-    if (isCancel(dependsOnRaw)) return null;
-
-    const deps = dependsOnRaw as string[];
-    const description = await text({
-      message: `${agentName}: What does it do?`,
-    });
-
-    if (isCancel(description)) return null;
-
-    const options = deps.length > 0 ? { dependsOn: deps } : undefined;
-
-    switch (agentType) {
-      case "researcher":
-        builder.addResearcher(agentName, agentName, description, options);
-        break;
-      case "implementer":
-        builder.addImplementer(agentName, agentName, description, options);
-        break;
-      case "reviewer":
-        builder.addReviewer(agentName, agentName, description, options);
-        break;
-      case "coordinator":
-        builder.addCoordinator(agentName, agentName, description, options);
-        break;
-    }
-  }
-
-  builder.withDagStrategy(3, 120_000).withRetryOnFailure(1);
-
-  return builder.build();
-}
-
-// ─── Tools Selection ──────────────────────────────────────────────────────
-
-async function selectCustomTools(): Promise<string[] | null> {
-  const availableTools = [
-    "read_file",
-    "read_multiple_files",
-    "list_files",
-    "search_files",
-    "analyze_codebase",
-    "grep",
-    "create_file",
-    "modify_file",
-    "replace_in_file",
-    "append_to_file",
-    "insert_at_line",
-    "delete_file",
-    "create_folder",
-    "run_command",
-    "run_tests",
-    "run_test_file",
-    "lint_project",
-    "format_project",
-    "git_status",
-    "git_log",
-    "git_diff",
-    "detect_framework",
-    "read_package_json",
-    "web_search",
-    "fetch_url",
-    "create_plan",
-    "get_plan",
-    "show_pending_changes",
-    "apply_changes",
-    "discard_changes",
-    "list_skills",
-    "read_skill",
-  ];
-
-  const selected: string[] = ["read_file"];
-
-  let addingTools = true;
-  while (addingTools) {
-    const remaining = availableTools.filter((t) => !selected.includes(t));
-    if (remaining.length === 0) break;
-
-    const tool = await select({
-      message: `Tool #${selected.length}?`,
-      options: [
-        ...remaining.slice(0, 15).map((t) => ({ value: t, label: t })),
-        { value: "done", label: "Done" },
-      ],
-    });
-
-    if (isCancel(tool)) return null;
-    if (tool === "done") break;
-
-    selected.push(tool);
-  }
-
-  return selected;
+  return null; // Interface is bypassed dynamically by the structural smart engine
 }
 
 // ─── Display & Approval ────────────────────────────────────────────────────
 
 function displayWorkflowSummary(workflow: MultiAgentWorkflow): void {
-  console.log(chalk.bold("\n📋 Workflow Configuration\n"));
+  console.log(chalk.bold("\n📋 Smart Workflow Configuration\n"));
   console.log(`Goal: ${workflow.goal}`);
   console.log(`Strategy: ${chalk.cyan(workflow.strategy.type)}`);
   console.log(`Agents: ${workflow.agents.length}`);
@@ -590,7 +325,6 @@ async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): 
       if (pending.length === 0) continue;
 
       console.log(chalk.bold(`\n🤖 Agent: ${agentId} (${pending.length} change(s))`));
-
       const groups = groupPendingByAgent(agentId, pending);
 
       for (const g of groups) {
@@ -606,13 +340,9 @@ async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): 
 
           if (isCancel(opt)) {
             for (const [, t] of trackers) {
-              for (const a of t.getPendingMutations()) {
-                t.updateStatus(a.id, "rejected", false);
-              }
+              for (const a of t.getPendingMutations()) t.updateStatus(a.id, "rejected", false);
             }
-            for (const [, executor] of executors) {
-              executor.discardChanges();
-            }
+            for (const [, executor] of executors) executor.discardChanges();
             console.log(chalk.yellow("\nAll changes discarded.\n"));
             return;
           }
@@ -645,12 +375,9 @@ async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): 
         const { errors } = executor.applyApprovedFromTracker();
         allErrors.push(...errors.map((e) => `[${agentId}] ${e}`));
       }
-
       if (allErrors.length > 0) {
         console.log(chalk.red("\nErrors:\n"));
-        for (const e of allErrors) {
-          console.log(chalk.red(`  · ${e}`));
-        }
+        for (const e of allErrors) console.log(chalk.red(`  · ${e}`));
       } else {
         console.log(chalk.green("\n✔ All changes applied.\n"));
       }
@@ -660,38 +387,17 @@ async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): 
 
 function displayExecutionResults(orchestrator: MultiAgentOrchestrator): void {
   const summary = orchestrator.getSummary();
-
   console.log(chalk.bold("\n📊 Execution Summary\n"));
-
   const statusColor = summary.status === "completed" ? chalk.green : chalk.red;
-  const statusIcon = summary.status === "completed" ? "✓" : "✗";
-  console.log(`Status: ${statusColor(`${statusIcon} ${summary.status}`)}`);
+  console.log(`Status: ${statusColor(`● ${summary.status}`)}`);
   console.log(`Strategy: ${summary.strategy}`);
   console.log(`Duration: ${summary.duration ? `${summary.duration}ms` : "N/A"}`);
 
   console.log(chalk.bold("\n🤖 Pool Stats\n"));
-  console.log(`Total: ${summary.poolStats.totalAgents}`);
-  console.log(`Completed: ${chalk.green(String(summary.poolStats.completedAgents))}`);
-  console.log(`Failed: ${chalk.red(String(summary.poolStats.failedAgents))}`);
-  console.log(`Overall: ${chalk.cyan(`${summary.poolStats.completionPercentage}%`)}`);
-
-  console.log(chalk.bold("\n🔍 Agent Results\n"));
-  for (const result of summary.executionResults) {
-    const icon = result.success ? chalk.green("✓") : chalk.red("✗");
-    const role = chalk.dim(`(${result.role})`);
-    console.log(`${icon} ${chalk.bold(result.agentId)} ${role}`);
-    console.log(`   Steps: ${result.steps}, Duration: ${result.durationMs}ms, Attempt: ${result.attemptNumber}`);
-    if (result.toolsUsed.length > 0) {
-      console.log(`   Tools: ${result.toolsUsed.join(", ")}`);
-    }
-  }
-
-  console.log(chalk.bold("\n✅ Tasks\n"));
-  console.log(`Completed: ${chalk.green(String(summary.completedTasks))}`);
-  console.log(`Failed: ${chalk.red(String(summary.failedTasks))}`);
+  console.log(`Total Agents Assigned: ${summary.poolStats.totalAgents}`);
+  console.log(`Completed Steps: ${chalk.green(String(summary.poolStats.completedAgents))}`);
+  console.log(`Completion Accuracy: ${chalk.cyan(`${summary.poolStats.completionPercentage}%`)}`);
 }
-
-// ─── Simple Logger ─────────────────────────────────────────────────────────
 
 const orchestrationLogger = {
   debug: (msg: string) => {

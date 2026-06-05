@@ -21,12 +21,14 @@ function stepPrompt(goal: string, step: PlanStep): string {
     return [`Goal: ${goal}`, `Step: ${step.title}`, step.description].join("\n");
 }
 
-export async function runPlanMode(): Promise<void> {
+export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
     console.log(chalk.bold("\nPlan Mode\n"));
 
-    const goal = await text({
-        message: "What is your goal?",
+    const goal = preCapturedGoal ?? await text({
+        message: "What would you like the agent to do for you?",
+        placeholder: "Concrete task for this codebase...",
     });
+
     if (isCancel(goal) || !goal.trim()) return;
 
     const config = defaultAgentConfig();

@@ -41,13 +41,15 @@ function asMd(questions: string, answer: string): string {
     return `## Question\n\n${questions.trim()}\n\n## Answer\n\n${answer.trim()}\n`;
 }
 
-export async function runAskMode() {
+export async function runAskMode(preCapturedGoal?: string) {
     console.log(chalk.bold("\nAsk Mode\n"));
 
-    const questions = await text({
-        message: "What do you want to ask?",
+    const goal = preCapturedGoal ?? await text({
+        message: "What would you like the agent to do for you?",
+        placeholder: "Concrete task for this codebase...",
     });
-    if (isCancel(questions) || !questions.trim()) return;
+
+    if (isCancel(goal) || !goal.trim()) return;
 
     const config = defaultAgentConfig();
     config.tools.allowShellExecution = false;
@@ -61,7 +63,7 @@ export async function runAskMode() {
     const { entry: sessionEntry } = beginSession({
         workspacePath: config.codebasePath,
         mode: "ask",
-        goal: questions.trim(),
+        goal: goal.trim(),
     });
 
     const agent = new ToolLoopAgent({
@@ -85,7 +87,7 @@ export async function runAskMode() {
                 },
                 () =>
                     agent.generate({
-                        prompt: questions.trim(),
+                        prompt: goal.trim(),
                         onStepFinish: ({ toolCalls }) => {
                             for (const tc of toolCalls) {
                                 const preview = JSON.stringify(tc.input).slice(0, 160);
@@ -149,7 +151,7 @@ export async function runAskMode() {
     }
 
     config.tools.allowFileCreation = true;
-    executor.createFile(filename, asMd(questions, answer));
+    executor.createFile(filename, asMd(goal, answer));
     config.tools.allowFileCreation = false;
 
     const ok = await runApprovalFlow(tracker);
