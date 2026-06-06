@@ -93,7 +93,7 @@ export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks =
 
         read_multiple_files: tool({
             description:
-                "Read multiple files in a single tool call.",
+                "Read multiple files in a single tool call. Each file is individually logged to the action trail.",
             inputSchema: z.object({
                 paths: z.array(z.string())
             }),

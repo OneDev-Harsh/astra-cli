@@ -295,12 +295,16 @@ export class ToolExecutor {
 
         const results: string[] = [];
         const regexFromGlob = (g: string): RegExp => {
+            // Convert glob pattern to regex:
+            // ** = match zero or more path segments (including /)
+            // *  = match anything except /
+            // ?  = match any single character except /
             const escaped = g
-                .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-                .replace(/\*\*/g, "")
-                .replace(/\*/g, "[^/\\\\]*")
-                .replace(/\//g, ".*")
-                .replace(/\?/g, ".");
+                .replace(/[.+^${}()|[\]\\]/g, "\\$&")    // escape regex metacharacters
+                .replace(/\\\*\\\*\//g, "(?:.+/)?")      // **/ → optionally one-or-more-path-segments/
+                .replace(/\\\*\\\*/g, ".*")              // ** → any characters including /
+                .replace(/\\\*/g, "[^/]*")               // * → match anything except /
+                .replace(/\\\?/g, "[^/]");               // ? → match any single char except /
             return new RegExp(`^${escaped}$`, "i");
         };
         const nameRe = regexFromGlob(globPattern.replace(/\\/g, "/"));
@@ -394,10 +398,23 @@ export class ToolExecutor {
 
         for (const rel of paths) {
             this.assertNotExcluded(rel, "read_multiple_files");
-            const content = this.getEffectiveText(rel);
-
-            if (content === undefined)
+            const abs = this.resolveSafe(rel);
+            if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
                 throw new Error(`File not found: ${rel}`);
+            }
+            const st = fs.statSync(abs);
+            if (st.size > this.config.maxFileSizeToRead) {
+                throw new Error(`File too large: ${rel}`);
+            }
+            const content = fs.readFileSync(abs, "utf8");
+            
+            // Log each file read individually for audit trail
+            this.tracker.log({
+                type: "code_analysis",
+                path: this.norm(rel),
+                details: { after: content, toolName: "read_multiple_files" },
+                status: "executed",
+            });
 
             result[rel] = content;
         }
@@ -931,16 +948,44 @@ export class ToolExecutor {
         )) {
             const cmd = a.details.command;
             if (!cmd) continue;
-            const r = spawnSync(cmd, {
-                shell: true,
-                cwd: this.config.codebasePath,
-                encoding: "utf8",
-                maxBuffer: 16 * 1024 * 1024,
-            });
-            if (r.status && r.status !== 0)
-                errors.push(`shell exit ${r.status}: ${cmd}`);
-            else
+            
+            try {
+                const r = spawnSync(cmd, {
+                    shell: true,
+                    cwd: this.config.codebasePath,
+                    encoding: "utf8",
+                    maxBuffer: 16 * 1024 * 1024, // 16MB allocation guard rail
+                    timeout: 300000,             // 5-minute definitive timeout threshold limit
+                });
+
+                // Check if the operation was forcefully killed due to a timeout hang
+                if (r.error && (r.error as any).code === "ETIMEDOUT") {
+                    errors.push(`Command timed out after 5 minutes of inactivity: "${cmd}"`);
+                    this.appliedActionIds.add(a.id);
+                    continue;
+                }
+
+                // Truncate overly long command execution outputs to keep CLI context stable
+                const MAX_OUTPUT_LENGTH = 15000;
+                let cleanStdout = r.stdout || "";
+                let cleanStderr = r.stderr || "";
+
+                if (cleanStdout.length > MAX_OUTPUT_LENGTH) {
+                    cleanStdout = cleanStdout.slice(0, MAX_OUTPUT_LENGTH) + "\n\n... [Output Truncated by Astra for context optimization] ...";
+                }
+                if (cleanStderr.length > MAX_OUTPUT_LENGTH) {
+                    cleanStderr = cleanStderr.slice(0, MAX_OUTPUT_LENGTH) + "\n\n... [Error Log Truncated by Astra] ...";
+                }
+
+                if (r.status !== 0) {
+                    errors.push(`Command "${cmd}" exited with code ${r.status}. Error: ${cleanStderr}`);
+                }
+                
                 this.appliedActionIds.add(a.id);
+            } catch (spawnError) {
+                errors.push(`Execution error spawning command "${cmd}": ${(spawnError as Error).message}`);
+                this.appliedActionIds.add(a.id);
+            }
         }
 
         return { errors };

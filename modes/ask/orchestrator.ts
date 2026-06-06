@@ -41,6 +41,18 @@ function asMd(questions: string, answer: string): string {
     return `## Question\n\n${questions.trim()}\n\n## Answer\n\n${answer.trim()}\n`;
 }
 
+/**
+ * Exponential backoff with jitter.
+ * Base 1s, max 30s: 1s → 2s → 4s → 8s → 16s → 30s (capped)
+ */
+async function backoffDelay(attemptNumber: number): Promise<void> {
+    const baseDelayMs = 1000;
+    const maxDelayMs = 30000;
+    const jitterMs = Math.random() * 500; // ±0ms to 500ms
+    const delayMs = Math.min(maxDelayMs, (1 << attemptNumber) * baseDelayMs + jitterMs);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 export async function runAskMode(preCapturedGoal?: string) {
     console.log(chalk.bold("\nAsk Mode\n"));
 
@@ -85,8 +97,12 @@ export async function runAskMode(preCapturedGoal?: string) {
 
     const combinedPrompt = `${systemDirective}\n\nUser Question: ${goal.trim()}`;
 
+    // ── Retry loop with bounded attempt count and exponential backoff ──────
+    const MAX_RETRIES = 5;
     let result;
-    while (true) {
+    let attemptCount = 0;
+
+    while (attemptCount < MAX_RETRIES) {
         try {
             result = await withSpinner(
                 {
@@ -109,25 +125,54 @@ export async function runAskMode(preCapturedGoal?: string) {
                         },
                     }),
             );
-            break;
+            break; // Success — exit retry loop
         } catch (error) {
+            attemptCount++;
+            const attemptsRemaining = MAX_RETRIES - attemptCount;
+
+            // If out of retries, fail gracefully
+            if (attemptsRemaining <= 0) {
+                console.log(
+                    chalk.red(`\n✗ AI provider error after ${MAX_RETRIES} attempts. Giving up.\n`)
+                );
+                markSessionInterrupted(sessionEntry.id);
+                await endSession(
+                    sessionEntry.id,
+                    tracker,
+                    `Provider error after ${MAX_RETRIES} retries.`,
+                );
+                executor.discardChanges();
+                return;
+            }
+
+            // Ask if user wants to retry
             const retry = await promptToRetryAiCall(
-                "The answer request hit a provider error.",
+                `The answer request hit a provider error (attempt ${attemptCount}/${MAX_RETRIES}).`,
                 error,
             );
-            if (retry) continue;
-            markSessionInterrupted(sessionEntry.id);
-            await endSession(
-                sessionEntry.id,
-                tracker,
-                "Stopped after AI provider error.",
+
+            if (!retry) {
+                markSessionInterrupted(sessionEntry.id);
+                await endSession(
+                    sessionEntry.id,
+                    tracker,
+                    "User cancelled after provider error.",
+                );
+                executor.discardChanges();
+                return;
+            }
+
+            // Apply backoff before next attempt
+            console.log(
+                chalk.dim(
+                    `  Waiting before retry ${attemptCount + 1}/${MAX_RETRIES}...`
+                )
             );
-            executor.discardChanges();
-            return;
+            await backoffDelay(attemptCount - 1);
         }
     }
 
-    const answer = result.text.trim() || "(agent returned empty response)";
+    const answer = result!.text.trim() || "(agent returned empty response)";
 
     console.log("\n" + renderTerminalMarkdown(answer) + "\n");
 

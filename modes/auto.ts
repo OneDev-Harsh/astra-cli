@@ -6,7 +6,9 @@ import { runAgentMode } from "./agent/orchestrator";
 import { runAskMode } from "./ask/orchestrator";
 import { runPlanMode } from "./plan/orchestrator";
 import { runMultiAgentMode } from "./multi/orchestrator";
-import { withSpinner } from "../tui/spinner"; // Adjust path as necessary
+import { withSpinner } from "../tui/spinner";
+import { beginSession, endSession } from "../session";
+import { ActionTracker } from "./agent/action-tracker"; // Adjust path if ActionTracker is located elsewhere
 
 export async function runAutoMode() {
     console.log(chalk.bold("\n  ✨ Auto-Routing Session\n"));
@@ -18,13 +20,24 @@ export async function runAutoMode() {
 
     if (!goal || typeof goal !== "string" || !goal.trim()) return;
 
+    const trimmedGoal = goal.trim();
+
+    // 1. Initialize and register the "auto" session in your database store
+    const { entry: sessionEntry } = beginSession({
+        workspacePath: process.cwd(),
+        mode: "auto",
+        goal: trimmedGoal,
+    });
+
+    // Create a generic tracker instance to satisfy endSession requirements
+    const autoTracker = new ActionTracker();
     let routedMode: "agent" | "ask" | "plan" | "multi" = "agent";
 
     try {
         routedMode = await withSpinner(
             {
                 message: "Analysing request intent...",
-                hideTime: true, // Emulates original behavior if you don't want duration shown here
+                hideTime: true,
             },
             async () => {
                 const result = await generateText({
@@ -38,7 +51,7 @@ export async function runAutoMode() {
                         "- 'multi': User explicitly requests multi-agent swarms or concurrent pipeline workers.",
                         "- 'agent': User wants to write code, modify files, delete files, refactor items, or run workspace terminal tasks.",
                         "",
-                        `Request: "${goal.trim()}"`,
+                        `Request: "${trimmedGoal}"`,
                         "",
                         "Respond with exactly one word from the choices: ask, plan, multi, agent. Do not include markdown formatting or punctuation.",
                     ].join("\n"),
@@ -48,22 +61,28 @@ export async function runAutoMode() {
                 if (["ask", "plan", "multi", "agent"].includes(word)) {
                     return word as "agent" | "ask" | "plan" | "multi";
                 }
-                return "agent"; // Safe fallback match inside the task
+                return "agent";
             }
         );
     } catch {
-        // Safe fallback to agent mode if execution fails
         routedMode = "agent";
     }
 
-    // Execute the target handler, forwarding the pre-captured prompt input string
+    // 2. Finalize and log the router's decision phase into the store history trail
+    await endSession(
+        sessionEntry.id, 
+        autoTracker, 
+        `Auto-router successfully mapped intent to down-stream [${routedMode}] engine.`
+    );
+
+    // 3. Execute the target handler, forwarding the pre-captured prompt input string
     if (routedMode === "agent") {
-        await runAgentMode(goal.trim());
+        await runAgentMode(trimmedGoal);
     } else if (routedMode === "ask") {
-        await runAskMode(goal.trim());
+        await runAskMode(trimmedGoal);
     } else if (routedMode === "plan") {
-        await runPlanMode(goal.trim());
+        await runPlanMode(trimmedGoal);
     } else if (routedMode === "multi") {
-        await runMultiAgentMode(goal.trim());
+        await runMultiAgentMode(trimmedGoal);
     }
 }

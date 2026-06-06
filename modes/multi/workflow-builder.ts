@@ -322,10 +322,6 @@ export class WorkflowBuilder {
 
     if (!this.workflow.id.trim()) errors.push("Workflow ID is required");
     if (!this.workflow.goal.trim()) errors.push("Goal is required");
-    console.log(
-    "Workflow agents:",
-    this.workflow.agents.length
-);
     if (this.workflow.agents.length === 0)
       errors.push("At least one agent is required");
 
