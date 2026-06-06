@@ -1,13 +1,14 @@
 {
-  "name": "astra",
+  "name": "astrabot",
   "version": "0.1.0",
   "description": "AI-native development companion — Agent, Ask, and Plan modes in your terminal.",
   "module": "index.ts",
   "type": "module",
   "bin": {
-    "astra": "./index.ts"
+    "astra": "bin/astra"
   },
   "files": [
+    "bin/astra",
     "index.ts",
     "ai/",
     "modes/",
@@ -22,9 +23,8 @@
     "dev": "bun run index.ts",
     "setup": "bun run index.ts setup",
     "wakeup": "bun run index.ts wakeup",
-    "build": "tsc",
     "test": "bun test",
-    "prepublishOnly": "bun test && npm run build"
+    "prepublishOnly": "bun test"
   },
   "devDependencies": {
     "@types/bun": "latest"
