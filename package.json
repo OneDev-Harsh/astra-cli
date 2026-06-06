@@ -12,13 +12,19 @@
     "ai/",
     "modes/",
     "tui/",
+    "session/",
+    "core/",
+    "game/",
     "README.md",
     "tsconfig.json"
   ],
   "scripts": {
     "dev": "bun run index.ts",
     "setup": "bun run index.ts setup",
-    "wakeup": "bun run index.ts wakeup"
+    "wakeup": "bun run index.ts wakeup",
+    "build": "tsc",
+    "test": "bun test",
+    "prepublishOnly": "bun test && npm run build"
   },
   "devDependencies": {
     "@types/bun": "latest"

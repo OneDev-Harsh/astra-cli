@@ -207,7 +207,7 @@ export async function runWakeup() {
             message: "Select an execution mode to proceed:",
             options: [
                 { value: "cli", label: "Interactive CLI Mode" },
-                { value: "telegram", label: "Telegram Gateway Interface" },
+                //{ value: "telegram", label: "Telegram Gateway Interface" },
                 { value: "exit", label: "Exit Application" }
             ]
         });
