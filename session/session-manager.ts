@@ -2,7 +2,7 @@ import chalk from "chalk";
 import { generateText, stepCountIs } from "ai";
 import { getAgentModel } from "../ai";
 import type { ActionTracker } from "../modes/agent/action-tracker";
-import type { SessionMode, SessionEntry } from "./store";
+import type { SessionMode, SessionEntry, TranscriptMessage } from "./store";
 import {
   listSessions,
   getSession,
@@ -10,6 +10,7 @@ import {
   createSession,
   updateSession,
   deleteSession,
+  appendTranscript,
 } from "./store";
 import { captureSessionContext, buildContextSummary } from "./session-context";
 
@@ -17,50 +18,106 @@ const C = {
   primary: chalk.hex("#a78bfa"),
   dim: chalk.hex("#6b7280"),
   success: chalk.hex("#34d399"),
+  warn: chalk.hex("#fbbf24"),
+  error: chalk.hex("#f87171"),
   time: chalk.hex("#fbbf24"),
 };
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+export interface BeginSessionResult {
+  entry: SessionEntry;
+  /** Full context block to inject into the system prompt, or null for brand-new sessions. */
+  contextSummary: string | null;
+  /** True if this is continuing an existing session (user didn't have to ask). */
+  autoResumed: boolean;
+  /** The session that was resumed, if any. */
+  resumedFrom?: SessionEntry;
+}
+
 /**
  * Start a new session or resume an existing one.
+ *
+ * Resume logic (in priority order):
+ *  1. Explicit `resumeSessionId` supplied → resume that session.
+ *  2. `autoResume: true` + an interrupted session exists in this workspace → resume it.
+ *  3. `autoResume: true` + the most recent session is "related" to the new goal → resume it.
+ *  4. Otherwise → create a fresh session.
  */
 export function beginSession(opts: {
   workspacePath: string;
   mode: SessionMode;
   goal: string;
   resumeSessionId?: string;
-}): { entry: SessionEntry; contextSummary: string | null } {
-  let previousSummary: string | null = null;
-  let previousId: string | undefined;
+  /** If true, silently resume when a clear prior session exists. Default: true. */
+  autoResume?: boolean;
+}): BeginSessionResult {
+  const autoResume = opts.autoResume ?? true;
 
+  // ── 1. Explicit resume
   if (opts.resumeSessionId) {
-    const prev = getSession(opts.resumeSessionId);
-    if (prev) {
-      previousSummary = buildContextSummary(prev);
-      previousId = prev.id;
-      updateSession(prev.id, { status: "completed" });
+    return resumeSession(opts.resumeSessionId, opts);
+  }
+
+  if (autoResume) {
+    // ── 2. Interrupted session in same workspace
+    const interrupted = listSessions(opts.workspacePath, 10).find(
+      (s) => s.status === "interrupted"
+    );
+    if (interrupted) {
+      return resumeSession(interrupted.id, opts, true);
+    }
+
+    // ── 3. Recent session that looks related
+    const recent = getMostRecentSession(opts.workspacePath);
+    if (recent && isRelated(recent, opts.goal)) {
+      return resumeSession(recent.id, opts, true);
     }
   }
 
+  // ── 4. Brand new session
   const entry = createSession({
     workspacePath: opts.workspacePath,
     mode: opts.mode,
     goal: opts.goal,
-    previousSessionId: previousId,
   });
+  return { entry, contextSummary: null, autoResumed: false };
+}
 
-  return { entry, contextSummary: previousSummary };
+/**
+ * Record a user message in the active session transcript.
+ * Call this each time the user sends a prompt so the transcript stays current.
+ */
+export function recordUserMessage(sessionId: string, content: string): void {
+  appendTranscript(sessionId, [
+    { role: "user", content, timestamp: new Date().toISOString() },
+  ]);
+  // Also track goal evolution
+  const session = getSession(sessionId);
+  if (session && !session.allGoals.includes(content)) {
+    updateSession(sessionId, { lastGoal: content });
+  }
+}
+
+/**
+ * Record an agent response in the active session transcript.
+ * Call this each time the agent produces output.
+ */
+export function recordAgentMessage(sessionId: string, content: string): void {
+  appendTranscript(sessionId, [
+    { role: "agent", content, timestamp: new Date().toISOString() },
+  ]);
 }
 
 /**
  * Call this after the agent finishes its work.
- * Extracts a summary from the action tracker and persists it.
+ * Extracts a summary, captures pending tasks, and persists everything.
  */
 export async function endSession(
   sessionId: string,
   tracker: ActionTracker,
-  agentResponse: string
+  agentResponse: string,
+  pendingTasks: string[] = []
 ): Promise<void> {
   const actions = tracker.getActions();
   const touchedFiles = [
@@ -77,22 +134,28 @@ export async function endSession(
 
   const summary = await summariseSession(actions, agentResponse);
 
-  // FIXED: Added 'actions' as the 3rd parameter here to persist them to disk
-  updateSession(sessionId, {
-    summary,
-    touchedFiles,
-    appliedActions,
-    rejectedActions,
-    status: "completed",
-  }, actions); 
+  updateSession(
+    sessionId,
+    {
+      summary,
+      touchedFiles,
+      appliedActions,
+      rejectedActions,
+      pendingTasks,
+      lastAgentResponse: agentResponse.slice(0, 2_000),
+      status: "completed",
+    },
+    actions
+  );
 }
 
 /**
- * End a multi-aggregates session from multiple agent trackers.
+ * End a multi-agent session from multiple trackers.
  */
 export async function endMultiSession(
   sessionId: string,
-  trackers: Map<string, { tracker: ActionTracker; response: string }>
+  trackers: Map<string, { tracker: ActionTracker; response: string }>,
+  pendingTasks: string[] = []
 ): Promise<void> {
   let allTouchedFiles: string[] = [];
   let totalApplied = 0;
@@ -112,22 +175,31 @@ export async function endMultiSession(
     if (response) responses.push(response);
   }
 
-const touchedFiles = [...new Set(allTouchedFiles)];
-  const allActions = [...trackers.values()].flatMap((t) => t.tracker.getActions());
-  const summary = await summariseSession(allActions, responses.join("\n\n"));
+  const touchedFiles = [...new Set(allTouchedFiles)];
+  const allActions = [...trackers.values()].flatMap((t) =>
+    t.tracker.getActions()
+  );
+  const combinedResponse = responses.join("\n\n");
+  const summary = await summariseSession(allActions, combinedResponse);
 
-  // FIXED: Added 'allActions' as the 3rd parameter here
-  updateSession(sessionId, {
-    summary,
-    touchedFiles,
-    appliedActions: totalApplied,
-    rejectedActions: totalRejected,
-    status: "completed",
-  }, allActions);
+  updateSession(
+    sessionId,
+    {
+      summary,
+      touchedFiles,
+      appliedActions: totalApplied,
+      rejectedActions: totalRejected,
+      pendingTasks,
+      lastAgentResponse: combinedResponse.slice(0, 2_000),
+      status: "completed",
+    },
+    allActions
+  );
 }
 
 /**
- * Mark the current session as interrupted (process killed, Ctrl+C, etc.)
+ * Mark the current session as interrupted (Ctrl+C, process killed, etc.)
+ * The transcript and state so far are preserved for auto-resume.
  */
 export function markSessionInterrupted(sessionId: string): void {
   updateSession(sessionId, { status: "interrupted" });
@@ -159,6 +231,83 @@ export function removeSession(id: string): boolean {
   return deleteSession(id);
 }
 
+// ── Internal helpers ───────────────────────────────────────────────────────
+
+function resumeSession(
+  previousId: string,
+  opts: { workspacePath: string; mode: SessionMode; goal: string },
+  autoResumed = false
+): BeginSessionResult {
+  const prev = getSession(previousId);
+  if (!prev) {
+    // Fallback: create fresh
+    const entry = createSession({
+      workspacePath: opts.workspacePath,
+      mode: opts.mode,
+      goal: opts.goal,
+    });
+    return { entry, contextSummary: null, autoResumed: false };
+  }
+
+  // Mark old session as completed before chaining
+  updateSession(prev.id, { status: "completed" });
+
+  const contextSummary = buildContextSummary(prev, { transcriptTurns: 12 });
+
+  const entry = createSession({
+    workspacePath: opts.workspacePath,
+    mode: opts.mode,
+    goal: opts.goal,
+    previousSessionId: prev.id,
+  });
+
+  // Carry forward pending tasks and touched files so the new session inherits them
+  if (prev.pendingTasks?.length || prev.touchedFiles?.length) {
+    updateSession(entry.id, {
+      pendingTasks: prev.pendingTasks ?? [],
+      touchedFiles: prev.touchedFiles ?? [],
+    });
+  }
+
+  return {
+    entry,
+    contextSummary,
+    autoResumed,
+    resumedFrom: prev,
+  };
+}
+
+/**
+ * Heuristic: is a new goal "related" to a previous session?
+ * Uses keyword overlap and recency (sessions older than 4h are less likely to be relevant).
+ */
+function isRelated(session: SessionEntry, newGoal: string): boolean {
+  // Don't auto-resume sessions older than 4 hours unless interrupted
+  const ageMs = Date.now() - new Date(session.updatedAt).getTime();
+  if (ageMs > 4 * 60 * 60 * 1_000 && session.status !== "interrupted") return false;
+  if (session.status === "completed" && ageMs > 30 * 60 * 1_000) return false;
+
+  const tokens = (s: string) =>
+    s
+      .toLowerCase()
+      .split(/\W+/)
+      .filter((w) => w.length > 3);
+
+  const prevTokens = new Set([
+    ...tokens(session.lastGoal),
+    ...tokens(session.summary ?? ""),
+    ...(session.allGoals ?? []).flatMap(tokens),
+  ]);
+
+  const newTokens = tokens(newGoal);
+  if (newTokens.length === 0) return false;
+
+  const overlap = newTokens.filter((t) => prevTokens.has(t)).length;
+  const ratio = overlap / newTokens.length;
+
+  return ratio >= 0.3; // ≥30% keyword overlap
+}
+
 // ── LLM Summarisation ─────────────────────────────────────────────────────
 
 async function summariseSession(
@@ -166,7 +315,7 @@ async function summariseSession(
   agentResponse: string
 ): Promise<string> {
   const actionsSummary = actions
-    .slice(0, 30)
+    .slice(0, 40)
     .map((a) => `- ${a.type} ${a.path} [${a.status}]`)
     .join("\n");
 
@@ -175,14 +324,15 @@ async function summariseSession(
       model: getAgentModel(),
       stopWhen: stepCountIs(1),
       prompt: [
-        "Summarise this coding session in 2-3 sentences.",
-        "Focus on: what was the goal, what files were changed, what was the outcome.",
+        "Summarise this coding session in 2-3 concise sentences.",
+        "Focus on: what was the goal, what key files were changed, and the outcome.",
+        "If there are incomplete tasks, mention them.",
         "",
         "Actions:",
         actionsSummary,
         "",
         "Agent's final response:",
-        agentResponse.slice(0, 2000),
+        agentResponse.slice(0, 2_000),
       ].join("\n"),
     });
     return result.text.trim();
@@ -203,15 +353,18 @@ export function formatSessionLine(s: SessionEntry): string {
     s.status === "completed"
       ? C.success("✔")
       : s.status === "interrupted"
-        ? C.dim("⏸")
+        ? C.warn("⏸")
         : C.dim("●");
   const modeTag = C.dim(`[${s.mode}]`);
-  return `${statusIcon} ${age.padEnd(8)} ${modeTag.padEnd(12)} ${s.lastGoal.slice(0, 60)}${s.lastGoal.length > 60 ? "…" : ""}`;
+  const pendingTag =
+    s.pendingTasks?.length ? C.warn(` (${s.pendingTasks.length} pending)`) : "";
+  const goal = s.lastGoal.slice(0, 55) + (s.lastGoal.length > 55 ? "…" : "");
+  return `${statusIcon} ${age.padEnd(8)} ${modeTag.padEnd(12)} ${goal}${pendingTag}`;
 }
 
 function humanAge(isoString: string): string {
   const diff = Date.now() - new Date(isoString).getTime();
-  const minutes = Math.floor(diff / 60000);
+  const minutes = Math.floor(diff / 60_000);
   if (minutes < 1) return "just now";
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);

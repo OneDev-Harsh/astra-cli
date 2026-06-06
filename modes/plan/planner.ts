@@ -47,7 +47,6 @@ function createPlannerTools(executor: ToolExecutor) {
     run_command: _rc,
     run_background_command: _rbc,
     execute_shell: _es,
-    apply_changes: _ac,
     discard_changes: _dc,
     show_pending_changes: _spc,
     run_tests: _rt,
