@@ -76,6 +76,15 @@ export async function runAskMode(preCapturedGoal?: string) {
         },
     });
 
+    // ── System Prompt Injection for Organic Identity ──────────────────────
+    const systemDirective = 
+        "You are Astra, an AI-native development CLI companion tool built to help " +
+        "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
+        "who you are, what your name is, or what model you are running on, you must always identify " +
+        "yourself exclusively as Astra. Do not mention your underlying model architecture or provider.";
+
+    const combinedPrompt = `${systemDirective}\n\nUser Question: ${goal.trim()}`;
+
     let result;
     while (true) {
         try {
@@ -87,7 +96,7 @@ export async function runAskMode(preCapturedGoal?: string) {
                 },
                 () =>
                     agent.generate({
-                        prompt: goal.trim(),
+                        prompt: combinedPrompt,
                         onStepFinish: ({ toolCalls }) => {
                             for (const tc of toolCalls) {
                                 const preview = JSON.stringify(tc.input).slice(0, 160);
