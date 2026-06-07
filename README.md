@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 Astra
+# ✨ Astra
 
 **AI-native development companion — Agent, Ask, Plan, and Multi-Agent modes in your terminal.**
 
@@ -66,7 +66,7 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 |------|---------|:---------------:|
 | **Auto** | LLM-powered intent router — automatically picks the best mode for your request | Depends on route |
 | **Agent** | Autonomous multi-step code modifications | ✅ (staged) |
-| **Ask** | Read-only Q&A about your codebase | ❌ (except optional save) |
+| **Ask** | Read-only Q&A about your codebase | ✅ (except optional save) |
 | **Plan** | Structured multi-step planning with selective execution | ✅ (staged) |
 | **Multi-Agent** | Multiple agents working together in configurable topologies | ✅ (staged) |
 

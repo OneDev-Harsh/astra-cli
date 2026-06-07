@@ -4,6 +4,7 @@ import figlet from "figlet";
 import { runCliMode } from "../modes/cli";
 import { getResumableSession, formatSessionLine } from "../session";
 import { withSpinner } from "./spinner"; // Custom high-fidelity spinner
+import pkg from "../package.json" with { type: "json" };
 
 const BANNER_FONT = "ANSI Shadow";
 
@@ -109,7 +110,7 @@ function drawBanner(ascii: string, phase: number, time: number): void {
     console.log(
         `\n  ${C.success("●")} ${C.text("ASTRA")} ${C.dim("│")} ${C.dim("AI-native development companion")}`
     );
-    console.log(`  ${C.dim("  Version 0.1.0 — Environment Ready")}\n`);
+    console.log(`  ${C.dim(`  Version ${pkg.version} — Environment Ready`)}\n`);
 }
 
 /**
