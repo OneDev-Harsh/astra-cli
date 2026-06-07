@@ -19,6 +19,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.1.1] — 2026-06-07
+
+### Added
+
+#### Minor fixes (f1f5eeb — 2026-06-07)
+
+- **Version bump** — `package.json` version updated from `0.1.0` to `0.1.1`.
+- **Dynamic version in banner** — Wakeup banner now reads the version from `package.json` at runtime via `import pkg from "../package.json"` instead of hardcoding `0.1.0`.
+- **README table fix** — Corrected the Ask mode "File Mutations?" column in the modes overview table from `❌` to `✅` (since saving the response is an optional mutation).
+
+#### README updated (fa99ba0 — 2026-06-07)
+
+- **Comprehensive README rewrite** — README.md grew from ~448 lines to ~981 lines, adding:
+  - Centered header with npm, license, Bun, and TypeScript badges
+  - "What Is Astra?" section with a mode comparison table
+  - Three installation options: global npm, npx (no install), and source
+  - Detailed configuration section with required/optional env vars and retry config vars
+  - Per-command documentation (`wakeup`, `setup`, `play`, `reset`) with descriptions and examples
+  - Complete tool system reference (35+ tools) organized by category (filesystem, shell, git, project, web, planning, staging, skills, session) with mutate indicators
+  - Detailed staging & approval pipeline with ASCII flow diagram
+  - Session management lifecycle with auto-resume heuristics
+  - Multi-agent orchestration deep-dive: strategies, roles, workflow templates (6), fluent API code example, and validation checks
+  - Retry & error handling: error classification table, retry presets, and behavior details
+  - Full project structure tree with file-level descriptions
+  - Dependencies split into runtime, dev, and peer tables with versions
+  - Roadmap and license footer
+
+#### Post publish (ab809c5 — 2026-06-07)
+
+- **npm binary entry point** — New `bin/astra` shebang file (`#!/usr/bin/env bun`) for global CLI installation via npm.
+- **Package rename** — `package.json` name changed from `astra` to `astrabot` (npm availability), with `bin` entry pointing to `bin/astra`.
+- **`.npmignore`** — New file excluding `tests/`, `.github/`, `sandbox_home/`, and `.gitignore` from the published npm package.
+- **Build script simplification** — Removed `build` (`tsc`) from scripts; `prepublishOnly` now runs `bun test` only (no compile step needed for Bun-executed TypeScript).
+
+#### Deployment ready (a78d38d — 2026-06-06)
+
+- **CI pipeline** — New `.github/workflows/ci.yml` running `bun install` → `bun test` on push/PR to `main`/`master`.
+- **CLI smoke tests** — New `tests/cli.test.ts` with 3 integration tests: `--version` returns semver, `--help` lists primary commands (`wakeup`, `setup`, `play`, `reset`), using a sandboxed `HOME` environment.
+- **Agent identity prompts** — All multi-agent role system prompts (`researcher`, `implementer`, `reviewer`, `coordinator`, `custom`) and the plan-mode planner prompt now include an identity preamble: *"You are Astra, an AI-native development CLI companion tool… If the user asks who you are… you must always identify yourself exclusively as Astra."*
+- **Package files expanded** — `package.json` `files` array updated to include `session/`, `core/`, and `game/` directories in the published package.
+- **Test and prepublish scripts** — Added `test` (`bun test`) and `prepublishOnly` (`bun test && npm run build`) scripts.
+- **Telegram mode hidden** — Commented out the "Telegram Gateway Interface" option in the wakeup mode selector (not yet implemented).
+- **Initial CHANGELOG** — This changelog file was first created in this commit, documenting all 21 commits from the initial scaffolding through v0.1.0.
+
+---
+
 ## [0.1.0] — 2026-06-06
 
 ### Added
@@ -258,10 +304,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 | Metric | Value |
 |--------|-------|
-| Total commits | 21 |
-| Development period | May 29 – June 6, 2026 (9 days) |
-| Total files created | 35+ |
-| Total lines of code | ~10,000+ |
+| Total commits | 25 |
+| Development period | May 29 – June 7, 2026 (10 days) |
+| Total files created | 38+ |
+| Total lines of code | ~12,000+ |
 | Interaction modes | 5 (Auto, Agent, Ask, Plan, Multi-Agent) |
 | Agent tools | 35+ |
 | Orchestration strategies | 4 (Sequential, Parallel, Hierarchical, Collaborative) |
