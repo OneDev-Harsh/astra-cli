@@ -30,6 +30,18 @@ program
   .command("setup")
   .description("Configure API keys and settings (~/.astra/.env)")
   .action(async () => {
+    let setupAscii = "";
+    try {
+      setupAscii = figlet.textSync("SETUP", {
+        font: "ANSI Shadow",
+        horizontalLayout: "fitted",
+      });
+    } catch {
+      setupAscii = figlet.textSync("SETUP", { font: "Standard" });
+    }
+
+    // Play the full breathing banner animation with the twinkling stars
+    await printBanner(setupAscii);
     await runSetup();
   });
 

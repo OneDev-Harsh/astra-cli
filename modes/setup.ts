@@ -184,7 +184,7 @@ export async function runSetup(): Promise<void> {
   if (setSkills) {
     const val = await text({
       message: "Skills directories (semicolon-separated)",
-      placeholder: "/path/to/skills;/another/dir",
+      placeholder: "/path/to/skills;/another/dir (eg: E:\Projects\Astra\.skills)",
       initialValue: currentSkillsDirs,
       validate: (_v) => undefined,
     });
