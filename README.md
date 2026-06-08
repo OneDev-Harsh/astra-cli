@@ -79,6 +79,8 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **35+ agent tools** — full filesystem access, shell execution, git integration, web research, project-aware tooling, and more
 - **Auto-router** — automatically classifies your request and routes it to the most appropriate mode
 - **Multi-model support** — different agents can use different LLMs in Multi-Agent mode
+- **Streaming output** — all modes use `agent.stream()` for real-time text generation display as the model produces output
+- **Token telemetry** — live token counters (↑input / ↓output) shown during agent execution with velocity summary (tok/s) at completion
 
 ### 🔒 Safety First
 - **Staging-first mutations** — no file is ever written or deleted without your explicit approval; all changes are staged in memory and presented for review before apply
@@ -114,7 +116,7 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **Colored logging** — green for agent actions, cyan for ask mode, yellow for warnings, red for errors
 
 ### 🎮 Easter Egg
-- **Arcade mini-games** — Retro Snake Classic and Neon Brick Breaker, served via Bun's native HTTP server
+- **Arcade mini-games** — Retro Snake Classic (HTML5 Canvas), Neon Brick Breaker, and Cosmic Drifter (space shooter with 4 weapons, boss fights, and XP leveling), served via Bun's native HTTP server
 
 ---
 
@@ -371,8 +373,8 @@ The primary autonomous coding mode. The agent has full access to all tools and c
 
 **Flow:**
 1. **Goal input** — "What would you like the agent to do for you?"
-2. **Agent execution** — the LLM autonomously calls tools (up to 50 steps) to accomplish the goal
-3. **Live tool logging** — each tool call is logged in real-time with the tool name and parameters
+2. **Agent execution** — the LLM autonomously calls tools (up to 50 steps) to accomplish the goal, with streaming output displayed in real-time
+3. **Live tool logging** — each tool call is logged in real-time with descriptive context (e.g., "reading src/foo.ts"), step duration, and token counts
 4. **Approval flow** — all staged changes are presented for review with diffs
 5. **Apply** — approved changes are written to disk
 
@@ -866,9 +868,9 @@ astrabot/
 
 Planned features not yet implemented:
 
+- [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
-- [ ] **Streaming token output** — for real-time agent response display
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode
 - [ ] **Multi-model support with per-mode model selection** — partially implemented in multi-agent mode only
 - [ ] **Persistent action history across sessions** — sessions store summaries but not full action logs

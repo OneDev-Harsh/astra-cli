@@ -37,7 +37,7 @@ export async function runAutoMode() {
         routedMode = await withSpinner(
             {
                 message: "Analysing request intent...",
-                hideTime: true,
+                hideTime: false,
             },
             async () => {
                 const result = await generateText({

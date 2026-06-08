@@ -12,10 +12,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Telegram mode** — stub present in wakeup menu, not yet implemented
 - **Undo/redo support** — via action log replay
-- **Streaming token output** — for real-time agent response display
 - **Configurable tool allowlists per mode** — currently hardcoded per mode
 - **Multi-model support with per-mode model selection** — partially implemented in multi-agent mode only
 - **Persistent action history across sessions** — sessions store summaries but not full action logs
+
+---
+
+## [0.1.2] — 2026-06-08
+
+### Added
+
+#### Streaming agent output & token telemetry (070c903 — 2026-06-08)
+
+- **Streaming agent calls** — All interaction modes (Agent, Ask, Plan, Multi-Agent) migrated from `agent.generate()` to `agent.stream()` with `for await...of` chunk consumption, enabling real-time output display as the model generates text.
+- **Token telemetry in spinner** — The spinner now displays live token counters (↑input / ↓output) during agent execution, with a final summary line showing total tokens and velocity (tok/s) at completion.
+- **Detailed step logging** — Tool call logging replaced raw JSON parameter previews with human-readable descriptions (e.g., `reading src/foo.ts`, `creating src/bar.ts`, `running "bun test"`) including per-step duration and token counts.
+- **`SpinnerContext` API extended** — New methods: `incrementOutputChunk()`, `updateTokens()`, `logStep()` for streaming-aware task integration.
+- **`LanguageModelUsage` interface** — SDK-agnostic token extraction supporting both v3 (`promptTokens`/`completionTokens`) and v4 (`inputTokens`/`outputTokens`) AI SDK schemas.
+- **Multi-agent streaming events** — New orchestrator event types: `agent:stream_start`, `agent:chunk`, `tool_executed`, `usage_updated` — enabling real-time UI updates during multi-agent execution.
+- **Auto mode elapsed time** — Auto mode spinner now shows elapsed time (`hideTime: false`) for better feedback during intent classification.
+
+#### Arcade games (4d69d27 — 2026-06-08)
+
+- **Cosmic Drifter** — New arcade game (`game/cosmic-drifter.html`) — a space shooter with WASD movement, mouse aiming, 4 weapons (Pulse Cannon, Plasma Beam, Scatter Gun, Void Cannon), 2 abilities (Nova Burst, Time Warp), boss fights every 5 waves, XP/leveling system, minimap, combo system, shield/dash mechanics, and audio synthesis via Web Audio API.
+
+#### Version update (2753487 — 2026-06-08)
+
+- **Version bump** — `package.json` version updated from `0.1.1` to `0.1.2`.
 
 ---
 
@@ -304,13 +327,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 | Metric | Value |
 |--------|-------|
-| Total commits | 25 |
-| Development period | May 29 – June 7, 2026 (10 days) |
-| Total files created | 38+ |
-| Total lines of code | ~12,000+ |
+| Total commits | 28 |
+| Development period | May 29 – June 8, 2026 (11 days) |
+| Total files created | 39+ |
+| Total lines of code | ~13,000+ |
 | Interaction modes | 5 (Auto, Agent, Ask, Plan, Multi-Agent) |
 | Agent tools | 35+ |
-| Orchestration strategies | 4 (Sequential, Parallel, Hierarchical, Collaborative) |
+| Orchestration strategies | 5 (Sequential, Parallel, Hierarchical, Collaborative, DAG) |
 | Agent roles | 5 (Researcher, Implementer, Reviewer, Coordinator, Custom) |
 | Retry presets | 4 (aiCall, toolExecution, network, critical) |
 | Error categories | 7 (Transient, Permanent, Rate Limit, Network, Auth, Timeout, Unknown) |

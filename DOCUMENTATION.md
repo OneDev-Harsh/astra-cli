@@ -1,9 +1,9 @@
 # Astra CLI — Complete Technical Documentation
 
-> **Version:** 0.1.0
+> **Version:** 0.1.2
 > **Runtime:** Bun (>=1.0.0)
 > **License:** MIT
-> **Package name in lockfile:** `arc-cli`
+> **Package name:** `astrabot`
 > **Bin name:** `astra`
 
 ---
@@ -39,14 +39,15 @@ Astra CLI (package name: `arc-cli`) is an **AI-native development companion** th
 
 It is built on **[Bun](https://bun.sh)** (a fast JavaScript/TypeScript runtime), uses **[OpenRouter](https://openrouter.ai)** as its LLM provider (supporting any model available on that platform), and leverages the **[Vercel AI SDK](https://sdk.vercel.ai)**'s `ToolLoopAgent` for autonomous, multi-step tool-driven workflows.
 
-Astra provides **four distinct interaction modes** within a CLI interface:
+Astra provides **five distinct interaction modes** within a CLI interface:
 
 | Mode | Purpose | Mutations? |
 |------|---------|------------|
+| **Auto** | LLM-powered intent router — automatically picks the best mode | Depends on route |
 | **Agent** | Autonomous multi-step code modifications | Yes (staged) |
 | **Ask** | Read-only Q&A about your codebase | No (except optional save) |
 | **Plan** | Structured multi-step planning with selective execution | Yes (staged) |
-| **Multi-Agent** | Multiple agents working together (sequential, parallel, hierarchical, or collaborative) | Yes (staged) |
+| **Multi-Agent** | Multiple agents working together in configurable topologies | Yes (staged) |
 
 A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 
@@ -56,7 +57,8 @@ A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 
 ### Core Features
 
-- **Four interaction modes** — Agent, Ask, Plan, and Multi-Agent, each tailored to a different development workflow
+- **Five interaction modes** — Auto, Agent, Ask, Plan, and Multi-Agent, each tailored to a different development workflow
+- **Streaming output** — all modes use `agent.stream()` with real-time chunk display and live token telemetry (↑input / ↓output counters, tok/s velocity)
 - **Full filesystem access** — read, create, modify, and delete files and directories through an AI agent, all via an in-memory staging overlay
 - **Shell execution** — queue arbitrary shell commands for agent-driven workflows (sync and background)
 - **Git integration** — `git status`, `git diff`, and `git log` tools for repository awareness
@@ -68,7 +70,7 @@ A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 - **Configurable safety** — exclude patterns (e.g., `node_modules`, `.git`, `dist`, `build`, `.next`, `*.log`, `.env*`), file size limits (default 1 MB), and per-tool permission toggles per agent role
 - **Session management** — sessions are persisted to disk with context summaries, enabling resumption after interruption
 - **Session tools** — `session_status` and `session_history` built-in tools the agent can call to recall previous work
-- **Rich terminal UI** — interactive prompts via `@clack/prompts`, markdown rendering in the terminal via `marked` + `marked-terminal`, a figlet ASCII banner on startup, animated spinners with elapsed time, and colored logging
+- **Rich terminal UI** — interactive prompts via `@clack/prompts`, markdown rendering in the terminal via `marked` + `marked-terminal`, a figlet ASCII banner on startup, animated spinners with live token telemetry and elapsed time, streaming output display, and colored logging
 - **Multi-model support** — per-agent model override in Multi-Agent mode (different agents can use different LLMs)
 - **Retry on failure** — configurable retry logic for flaky AI provider calls and multi-agent step failures
 
@@ -682,6 +684,7 @@ This is injected into the agent's instructions on resume, giving it short-term m
 | **Parallel** | Agents run in batches of `maxConcurrentAgents` (default 3). Each batch uses `Promise.all()`. Supports timeout per agent. |
 | **Hierarchical** | Coordinator runs first (planning phase), then specialists execute. Coordinator's output is shared with all specialists. |
 | **Collaborative** | Each agent takes a turn. After each turn, the agent's output is broadcast via `MessageBroker` to all other agents. Agents receive queued messages on their next turn. |
+| **DAG** | Agents run as soon as all their dependencies are satisfied. Supports cycle detection and deadlock handling by skipping blocked agents. |
 
 #### Message Broker (`message-broker.ts`)
 
@@ -761,10 +764,7 @@ astra-cli/                          # Project root
 ├── tui/                            # Terminal UI utilities.
 │   ├── terminal-md.ts              # Markdown-to-terminal rendering via marked + marked-terminal.
 │   │                                # Auto-detects terminal width (40-120 chars). Caches configuration.
-│   ├── spinner.ts                  # Animated spinner with elapsed time display.
-│   │                                # Frames: ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ (80ms interval).
-│   │                                # Colors: violet primary, grey dim, green success, red error, amber time.
-│   │                                # withSpinner<T>(opts, task): runs task, shows ✔/✘ with elapsed time.
+│   ├── spinner.ts                  # Animated spinner with metabolic rate engine, live token telemetry (↑input/↓output), streaming chunk tracking, and tok/s velocity summary.
 │   └── wakeup.ts                   # Banner (figlet "ANSI Shadow" font) + top-level mode selection.
 │                                    # Gold #ffd000 color. Checks for resumable interrupted sessions.
 │                                    # Infinite loop: clear → print → select mode → run → repeat.

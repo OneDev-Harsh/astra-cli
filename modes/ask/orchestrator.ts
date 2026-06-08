@@ -11,6 +11,7 @@ import { runApprovalFlow } from "../agent/approval";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { createWebTools } from "../plan/web-tools";
 import { withSpinner } from "../../tui/spinner";
+import type { SpinnerContext, LanguageModelUsage } from "../../tui/spinner";
 import { beginSession, endSession, markSessionInterrupted } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
@@ -53,6 +54,62 @@ async function backoffDelay(attemptNumber: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+/**
+ * Safely extract token counts from an AI SDK usage object.
+ * Handles both v3 (`promptTokens`/`completionTokens`) and v4
+ * (`inputTokens`/`outputTokens`) schema shapes.
+ */
+function extractUsage(usage: unknown): LanguageModelUsage {
+    const raw = usage as any;
+    return {
+        promptTokens:     raw?.promptTokens     ?? undefined,
+        completionTokens: raw?.completionTokens ?? undefined,
+        inputTokens:      raw?.inputTokens      ?? undefined,
+        outputTokens:     raw?.outputTokens     ?? undefined,
+    };
+}
+
+/**
+ * Helper to generate descriptive text depending on the tool executed and its parameters.
+ */
+function getToolDetailsString(toolName: string, input: any): string {
+    if (!input || typeof input !== "object") return "";
+
+    const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
+    
+    switch (toolName) {
+        case "read_file":
+            return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
+        case "create_file":
+            return targetPath ? `creating ${chalk.green(targetPath)}` : "";
+        case "modify_file":
+        case "replace_in_file":
+        case "append_to_file":
+        case "insert_at_line":
+            return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
+        case "delete_file":
+            return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
+        case "create_folder":
+            return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
+        case "run_command":
+        case "run_background_command":
+        case "execute_shell":
+            return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
+        case "run_test_file":
+            return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
+        case "session_search":
+        case "web_search":
+            return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
+        case "fetch_url":
+            return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+        default:
+            if (targetPath) return `target: ${targetPath}`;
+            if (input.query) return `query: "${input.query}"`;
+            if (input.command) return `cmd: "${input.command}"`;
+            return "";
+    }
+}
+
 export async function runAskMode(preCapturedGoal?: string) {
     console.log(chalk.bold("\nAsk Mode\n"));
 
@@ -78,7 +135,7 @@ export async function runAskMode(preCapturedGoal?: string) {
         goal: goal.trim(),
     });
 
-    const agent = new ToolLoopAgent({
+    const agent: any = new ToolLoopAgent({
         model: getAgentModel(),
         stopWhen: stepCountIs(25),
         tools: {
@@ -88,7 +145,6 @@ export async function runAskMode(preCapturedGoal?: string) {
         },
     });
 
-    // ── System Prompt Injection for Organic Identity ──────────────────────
     const systemDirective = 
         "You are Astra, an AI-native development CLI companion tool built to help " +
         "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
@@ -97,40 +153,78 @@ export async function runAskMode(preCapturedGoal?: string) {
 
     const combinedPrompt = `${systemDirective}\n\nUser Question: ${goal.trim()}`;
 
-    // ── Retry loop with bounded attempt count and exponential backoff ──────
     const MAX_RETRIES = 5;
-    let result;
+    let resultText = "";
     let attemptCount = 0;
 
     while (attemptCount < MAX_RETRIES) {
         try {
-            result = await withSpinner(
+            resultText = await withSpinner(
                 {
                     message: "Thinking...",
                     doneMessage: "here's the answer",
                     failMessage: "couldn't get an answer",
                 },
-                () =>
-                    agent.generate({
+                async (ctx) => {
+                    // Track runtime baseline for individual step timings
+                    let lastStepTimestamp = Date.now();
+
+                    const streamResult = await agent.stream({
                         prompt: combinedPrompt,
-                        onStepFinish: ({ toolCalls }) => {
-                            for (const tc of toolCalls) {
-                                const preview = JSON.stringify(tc.input).slice(0, 160);
-                                console.log(
-                                    chalk.cyan("  -"),
-                                    chalk.bold(String(tc.toolName)),
-                                    chalk.dim(preview + (preview.length > 160 ? "..." : "")),
-                                );
+                        onStepFinish: ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
+                            const now = Date.now();
+                            const stepDurationMs = now - lastStepTimestamp;
+                            // Reset the mark for the following step loop
+                            lastStepTimestamp = now;
+
+                            const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
+
+                            // Extract token telemetry
+                            const stepMetrics = extractUsage(usage);
+                            const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
+                            const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
+
+                            if (usage) {
+                                ctx.updateTokens(stepMetrics);
+                            }
+
+                            // Output unique logging details for tool transactions
+                            if (toolCalls && toolCalls.length > 0) {
+                                for (const tool of toolCalls) {
+                                    const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
+                                    const separator = detailedInfo ? " — " : "";
+
+                                    ctx.logStep(
+                                        `  ${chalk.blue("➔")} ${chalk.dim("Executed:")} ` +
+                                        `${chalk.cyan.bold(tool.toolName)}` +
+                                        `${separator}${detailedInfo} ` +
+                                        `${chalk.gray(`(${elapsedSeconds}s · ↑${inT} ↓${outT} tokens)`)}`
+                                    );
+                                }
                             }
                         },
-                    }),
+                    });
+
+                    let accumulated = "";
+                    let firstChunk = true;
+
+                    for await (const chunk of streamResult.textStream) {
+                        if (firstChunk) {
+                            ctx.updateMessage("Thinking...");
+                            firstChunk = false;
+                        }
+                        accumulated += chunk;
+                        ctx.incrementOutputChunk();
+                    }
+
+                    return accumulated;
+                },
             );
-            break; // Success — exit retry loop
+            break;
         } catch (error) {
             attemptCount++;
             const attemptsRemaining = MAX_RETRIES - attemptCount;
 
-            // If out of retries, fail gracefully
             if (attemptsRemaining <= 0) {
                 console.log(
                     chalk.red(`\n✗ AI provider error after ${MAX_RETRIES} attempts. Giving up.\n`)
@@ -145,7 +239,6 @@ export async function runAskMode(preCapturedGoal?: string) {
                 return;
             }
 
-            // Ask if user wants to retry
             const retry = await promptToRetryAiCall(
                 `The answer request hit a provider error (attempt ${attemptCount}/${MAX_RETRIES}).`,
                 error,
@@ -162,7 +255,6 @@ export async function runAskMode(preCapturedGoal?: string) {
                 return;
             }
 
-            // Apply backoff before next attempt
             console.log(
                 chalk.dim(
                     `  Waiting before retry ${attemptCount + 1}/${MAX_RETRIES}...`
@@ -172,7 +264,7 @@ export async function runAskMode(preCapturedGoal?: string) {
         }
     }
 
-    const answer = result!.text.trim() || "(agent returned empty response)";
+    const answer = resultText.trim() || "(agent returned empty response)";
 
     console.log("\n" + renderTerminalMarkdown(answer) + "\n");
 

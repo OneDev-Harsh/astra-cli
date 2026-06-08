@@ -85,7 +85,6 @@ const TEMPLATE_CATALOG = [
 export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void> {
   console.log(chalk.bold("\n👥 Multi-Agent Orchestration\n"));
 
-  // 1. Gather the goal text if not passed directly from Auto Mode
   const finalGoal = preCapturedGoal?.trim() ?? await text({
     message: "What complex operations workflow would you like to run?",
     placeholder: "e.g., 'Audit auth code security and patch the leaks'...",
@@ -94,8 +93,6 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
   if (!finalGoal || isCancel(finalGoal) || !finalGoal.trim()) return;
 
   let workflow: MultiAgentWorkflow | null = null;
-
-  // 2. AI Intelligence Engine: Analyze and assemble the best team
   const decisionSpinner = spinner();
   decisionSpinner.start("AI analyzing requirements and building optimal agent team topology...");
 
@@ -134,7 +131,6 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
       ].join("\n"),
     });
 
-    // Clean any accidental markdown wraps from the raw response text
     let cleanJsonText = analysisResponse.text.trim();
     if (cleanJsonText.startsWith("```")) {
       cleanJsonText = cleanJsonText.replace(/^```json\s*/, "").replace(/```$/, "").trim();
@@ -151,7 +147,6 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
       }
     }
 
-    // fallback / bespoke generation block
     if (!workflow && config.decisionType === "custom" && Array.isArray(config.agents)) {
       decisionSpinner.stop(`🛠️ AI created bespoke customized workspace swarm [Strategy: ${config.strategy.toUpperCase()}]`);
       const builder = new WorkflowBuilder(`wf_custom_ai_${timestamp}`, finalGoal);
@@ -172,17 +167,14 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
       workflow = builder.build();
     }
   } catch (err) {
-    // Fail-safe graceful fallback if model errors or outputs invalid JSON
     decisionSpinner.stop("⚠️ Model parsing bottleneck; falling back to dynamic Feature Development group");
   }
 
-  // Double fallback to protect operation runtime loop
   if (!workflow) {
     const timestamp = Date.now();
     workflow = WorkflowTemplates.featureDevelopmentWorkflow(`wf_fallback_${timestamp}`, finalGoal);
   }
 
-  // 3. Complete Validation Layer
   const validation = WorkflowBuilder.validateWorkflow(workflow);
   if (!validation.isValid) {
     console.log(chalk.red("\n❌ Generated Workflow validation failed:\n"));
@@ -190,7 +182,6 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
     return;
   }
 
-  // 4. Summarize and Confirm Execution with User
   displayWorkflowSummary(workflow);
 
   const shouldContinue = await confirm({
@@ -205,24 +196,38 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
   // 5. Standard Core Operational Orchestrator Lifecycle Loop Execution
   const orchestrator = new MultiAgentOrchestrator(workflow);
 
-  const unsubscribe = orchestrator.onEvent((event: OrchestratorEvent) => {
-    if (event.type === "agent:start") {
-      orchestrationLogger.debug(`Agent ${event.agentId} running...`);
-    } else if (event.type === "agent:complete") {
-      orchestrationLogger.debug(`Agent ${event.agentId} successfully completed steps`);
-    }
-  });
-
+  // Map orchestrator events back to the UI engine context dynamically
   await withSpinner(
     {
       message: "Orchestrating system agents pipeline execution...",
       doneMessage: "workflow steps completed successfully",
       failMessage: "workflow processing routine encountered a bottleneck",
     },
-    () => orchestrator.execute(),
-  );
+    async (ctx) => {
+      // FIX: Added stream intercepts alongside tool execution events
+      const unsubscribe = orchestrator.onEvent((event: any) => {
+        if (event.type === "agent:start") {
+          ctx.updateMessage(`Agent [${chalk.magenta(event.agentId || event.payload?.agentId)}] active...`);
+        } else if (event.type === "agent:stream_start") {
+          ctx.updateMessage(`Agent [${chalk.magenta(event.agentId)}] synthesizing...`);
+        } else if (event.type === "agent:chunk") {
+          ctx.incrementOutputChunk(); // Forces the pulsing 🟢 arrow to light up
+        } else if (event.type === "tool_executed" && event.payload?.logLine) {
+          ctx.logStep(event.payload.logLine);
+        } else if (event.type === "usage_updated" && event.payload?.usage) {
+          ctx.updateTokens(event.payload.usage);
+        } else if (event.type === "agent:complete") {
+          ctx.logStep(`  ${chalk.green("✔")} [${chalk.magenta(event.agentId)}] task resolved successfully.`);
+        } else if (event.type === "agent:failed") {
+          ctx.logStep(`  ${chalk.red("✘")} [${chalk.magenta(event.agentId)}] step faulted.`);
+        }
+      });
 
-  unsubscribe();
+      const res = await orchestrator.execute();
+      unsubscribe();
+      return res;
+    }
+  );
 
   // 6. Print Summary Metric Sheets & Route Approval
   displayExecutionResults(orchestrator);

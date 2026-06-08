@@ -19,6 +19,62 @@ import { getAgentModel } from "../../ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { getEnv, getMultiRetryConfig } from "../../ai/config-loader";
 import { withRetry } from "../../core/retry";
+import chalk from "chalk";
+import type { LanguageModelUsage } from "../../tui/spinner";
+
+/**
+ * Safely extract token counts from an AI SDK usage object.
+ */
+function extractUsage(usage: unknown): LanguageModelUsage {
+  const raw = usage as any;
+  return {
+    promptTokens:     raw?.promptTokens     ?? undefined,
+    completionTokens: raw?.completionTokens ?? undefined,
+    inputTokens:      raw?.inputTokens      ?? undefined,
+    outputTokens:     raw?.outputTokens     ?? undefined,
+  };
+}
+
+/**
+ * Helper to generate descriptive text depending on the tool executed and its parameters.
+ */
+function getToolDetailsString(toolName: string, input: any): string {
+  if (!input || typeof input !== "object") return "";
+
+  const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
+  
+  switch (toolName) {
+    case "read_file":
+      return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
+    case "create_file":
+      return targetPath ? `creating ${chalk.green(targetPath)}` : "";
+    case "modify_file":
+    case "replace_in_file":
+    case "append_to_file":
+    case "insert_at_line":
+      return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
+    case "delete_file":
+      return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
+    case "create_folder":
+      return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
+    case "run_command":
+    case "run_background_command":
+    case "execute_shell":
+      return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
+    case "run_test_file":
+      return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
+    case "session_search":
+    case "web_search":
+      return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
+    case "fetch_url":
+      return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+    default:
+      if (targetPath) return `target: ${targetPath}`;
+      if (input.query) return `query: "${input.query}"`;
+      if (input.command) return `cmd: "${input.command}"`;
+      return "";
+  }
+}
 
 /**
  * Logger utility with consistent formatting
@@ -40,13 +96,6 @@ const orchestrationLogger = {
 
 /**
  * Main orchestrator for coordinating multiple agents.
- *
- * Supports strategies:
- * - Sequential: agents work one after another
- * - Parallel: agents work simultaneously with concurrency limits
- * - Hierarchical: coordinator delegates to specialist agents
- * - Collaborative: agents communicate and negotiate
- * - DAG: agents run when dependencies are satisfied
  */
 export class MultiAgentOrchestrator {
   private workflow: MultiAgentWorkflow;
@@ -55,7 +104,9 @@ export class MultiAgentOrchestrator {
   private state: OrchestratorState;
   private trackers: Map<string, ActionTracker> = new Map();
   private executors: Map<string, ToolExecutor> = new Map();
-  private agents: Map<string, ToolLoopAgent> = new Map();
+  
+  // FIX: Type map 'any' to decouple tooling signatures universally
+  private agents: Map<string, any> = new Map();
   private sharedTracker: ActionTracker;
   private eventListeners: OrchestratorEventListener[] = [];
 
@@ -111,9 +162,6 @@ export class MultiAgentOrchestrator {
 
   // ─── Event System ─────────────────────────────────────────────────────────
 
-  /**
-   * Register a listener for orchestrator events
-   */
   onEvent(listener: OrchestratorEventListener): () => void {
     this.eventListeners.push(listener);
     return () => {
@@ -122,7 +170,7 @@ export class MultiAgentOrchestrator {
     };
   }
 
-  private _emitEvent(event: OrchestratorEvent): void {
+  private _emitEvent(event: any): void {
     this.state.events.push(event);
     for (const listener of this.eventListeners) {
       try {
@@ -200,7 +248,6 @@ export class MultiAgentOrchestrator {
     const config: SingleAgentConfig = defaultAgentConfig();
     const tracker = new ActionTracker();
 
-    // Configure permissions by role
     switch (agentConfig.role) {
       case "researcher":
         config.tools.allowShellExecution = false;
@@ -379,21 +426,85 @@ export class MultiAgentOrchestrator {
       const prompt = this._buildAgentPrompt(agentConfig);
       orchestrationLogger.info(agentConfig.id, "Generating model response");
 
-      // Wrap the agent.generate call with automatic retry logic
+      const stepTimingState = { lastStepTimestamp: Date.now() };
+
+      // FIX: Replace agent.generate() with agent.stream() & for await chunk loop
       const { result, stats } = await withRetry(
-        () => agent.generate({
-          prompt,
-          onStepFinish: ({ toolCalls }) => {
-            for (const tc of toolCalls) {
-              const toolName = String(tc.toolName);
-              if (!executedTools.includes(toolName)) {
-                executedTools.push(toolName);
-                orchestrationLogger.info(agentConfig.id, `Executed tool: ${toolName}`);
+        async () => {
+          stepTimingState.lastStepTimestamp = Date.now(); 
+          
+          const streamResult = await agent.stream({
+            prompt,
+            onStepFinish: ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
+              const now = Date.now();
+              const stepDurationMs = now - stepTimingState.lastStepTimestamp;
+              stepTimingState.lastStepTimestamp = now;
+
+              const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
+              const stepMetrics = extractUsage(usage);
+              const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
+              const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
+
+              if (usage) {
+                this._emitEvent({
+                  type: "usage_updated",
+                  timestamp: new Date(),
+                  payload: { usage: stepMetrics }
+                });
+              }
+
+              if (toolCalls && toolCalls.length > 0) {
+                for (const tc of toolCalls) {
+                  const toolName = String(tc.toolName);
+                  if (!executedTools.includes(toolName)) {
+                    executedTools.push(toolName);
+                    orchestrationLogger.info(agentConfig.id, `Executed tool: ${toolName}`);
+                  }
+                  
+                  const detailedInfo = getToolDetailsString(toolName, tc.input);
+                  const separator = detailedInfo ? " — " : "";
+
+                  this._emitEvent({
+                    type: "tool_executed",
+                    timestamp: new Date(),
+                    payload: {
+                      agentId: agentConfig.id,
+                      toolName: toolName,
+                      logLine: `  ${chalk.blue("➔")} [${chalk.magenta(agentConfig.id)}] ${chalk.dim("Executed:")} ` +
+                               `${chalk.cyan.bold(toolName)}${separator}${detailedInfo} ` +
+                               `${chalk.gray(`(${elapsedSeconds}s · ↑${inT} ↓${outT} tokens)`)}`
+                    }
+                  });
+                }
               }
               agentInstance.context.metadata.currentStep++;
+            },
+          });
+
+          // Process the text chunk stream dynamically
+          let accumulated = "";
+          let firstChunk = true;
+          for await (const chunk of streamResult.textStream) {
+            if (firstChunk) {
+              this._emitEvent({ 
+                type: "agent:stream_start", 
+                timestamp: new Date(), 
+                agentId: agentConfig.id 
+              });
+              firstChunk = false;
             }
-          },
-        }),
+            accumulated += chunk;
+            
+            // Broadcast chunk metrics natively so the UI spinner pulsing triggers
+            this._emitEvent({ 
+              type: "agent:chunk", 
+              timestamp: new Date(), 
+              agentId: agentConfig.id 
+            });
+          }
+
+          return { text: accumulated };
+        },
         {
           maxRetries: effectiveMaxRetries,
           baseDelayMs: 1000,
@@ -609,9 +720,6 @@ export class MultiAgentOrchestrator {
     }
   }
 
-  /**
-   * DAG (Directed Acyclic Graph) execution: agents run when all dependencies are satisfied.
-   */
   private async _executeDAG(): Promise<void> {
     orchestrationLogger.strategy("dag", "Executing with dependency-aware scheduling");
     const maxConcurrent = this.workflow.strategy.config.maxConcurrentAgents || 4;
@@ -621,7 +729,6 @@ export class MultiAgentOrchestrator {
     let batch: string[] = [];
 
     while (pending.size > 0 || running.size > 0) {
-      // Find ready agents
       const ready = this.poolManager.getReadyAgents();
       for (const agent of ready) {
         if (!pending.has(agent.config.id)) continue;
@@ -633,9 +740,7 @@ export class MultiAgentOrchestrator {
       }
 
       if (batch.length === 0) {
-        // Nothing ready and nothing running
         if (pending.size > 0) {
-          // ✅ FIXED: Handle deadlock by skipping blocked agents
           const blocked = Array.from(pending);
           orchestrationLogger.error(
             "ORCHESTRATOR",
@@ -677,7 +782,6 @@ export class MultiAgentOrchestrator {
         break;
       }
 
-      // Execute batch in parallel
       orchestrationLogger.strategy("dag", `Executing batch: ${batch.join(", ")}`);
       const promises = batch.map((id) => {
         const cfg = this.workflow.agents.find((a) => a.id === id)!;
@@ -698,7 +802,6 @@ export class MultiAgentOrchestrator {
         if (result.success && agent) {
           this._updateSharedContext(agent, result);
         } else if (agent) {
-          // ✅ FIXED: Pass result to failure handler
           await this._handleAgentFailure(agent, result);
         }
       }
@@ -729,7 +832,6 @@ export class MultiAgentOrchestrator {
       this.workflow.strategy.config.retryOnFailure &&
       result.context.metadata.retryCount < maxRetries;
 
-    // ✅ FIXED: Proper retry logic
     if (shouldRetry) {
       this.poolManager.markAgentRetrying(agentConfig.id);
       this._emitEvent({
@@ -743,18 +845,14 @@ export class MultiAgentOrchestrator {
         agentConfig.id,
         `Retry ${1 + result.context.metadata.retryCount}/${maxRetries}`,
       );
-
-      // Retry will happen in the main execution loop
       return;
     }
 
-    // Agent has failed permanently
     this.poolManager.markAgentFailed(agentConfig.id);
     this.state.sharedContext.metadata.failedTasks.push(
       `${agentConfig.id}: ${agentConfig.description}`,
     );
 
-    // ✅ FIXED: Cascade skip to dependent agents
     const dependentIds = this.workflow.agents
       .filter((a) => a.dependsOn?.includes(agentConfig.id))
       .map((a) => a.id);
@@ -788,7 +886,6 @@ export class MultiAgentOrchestrator {
           payload: { reason: `dependency_${agentConfig.id}_failed` },
         });
 
-        // Recursively skip agents depending on this one
         const depAgentConfig = this.workflow.agents.find((a) => a.id === depId);
         if (depAgentConfig) {
           await this._handleAgentFailure(depAgentConfig, skipResult);
@@ -796,13 +893,11 @@ export class MultiAgentOrchestrator {
       }
     }
 
-    // Handle based on failure mode
     if (failureMode === "fail-fast") {
       throw new Error(
         `Agent ${agentConfig.id} failed: ${result.error?.message || "unknown error"}`,
       );
     }
-    // "continue" and "fail-at-end" just mark as failed and continue
   }
 
   // ─── Public API ────────────────────────────────────────────────────────────
@@ -873,9 +968,6 @@ export class MultiAgentOrchestrator {
     };
   }
 
-  /**
-   * Human-readable debug info
-   */
   debugInfo(): string {
     const lines: string[] = [
       `=== Orchestrator Debug Info ===`,

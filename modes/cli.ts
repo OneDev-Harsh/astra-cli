@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import {select, isCancel} from "@clack/prompts"
+import {select, isCancel, } from "@clack/prompts"
 import { runAgentMode } from "./agent/orchestrator";
 import { runAskMode } from "./ask/orchestrator";
 import { runPlanMode } from "./plan/orchestrator";
@@ -31,6 +31,14 @@ export async function runCliMode () {
             await runAskMode()
         }
         else if(mode==="multi"){
+            // const warning = await select({
+            //     message: "⚠️  WARNING: This mode is still in early development, you can try it out but some features are not implemented yet.",
+            //     options: [
+            //         {value: "ok", label: "Proceed"},
+            //         {value:"cancel", label: " ⬅ Back to main menu"}
+            //     ]
+            // })
+            // if(isCancel(warning) || warning === "cancel") return
             await runMultiAgentMode()
         }
         else if(mode==="auto"){
