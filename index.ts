@@ -11,6 +11,7 @@ import chalk from "chalk";
 import figlet from "figlet"; // Imported figlet for the arcade banner generation
 import { confirm, isCancel, select } from "@clack/prompts";
 import { exec } from "child_process";
+import { runAutoMode } from "./modes/auto";
 
 const program = new Command();
 
@@ -18,6 +19,22 @@ program
   .name("astra")
   .description("Astra CLI — AI-native development companion")
   .version(pkg.version, "-v, --version", "Output the current version");
+
+program
+  .argument("[prompt...]", "Optional direct prompt goal to execute instantly in Agent Mode")
+  .action(async (promptArray: string[]) => {
+    // If the user provided words (e.g., `astra "create an express server"` or `astra create an express server`)
+    if (promptArray && promptArray.length > 0) {
+      const combinedGoal = promptArray.join(" ").trim();
+      if (combinedGoal) {
+        await runAutoMode(combinedGoal);
+        return;
+      }
+    }
+    
+    // Fallback: If no arguments are typed at all (just `astra`), fallback to interactive wakeup menu
+    await runWakeup();
+  });
 
 program
   .command("wakeup")

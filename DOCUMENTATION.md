@@ -35,7 +35,7 @@
 
 ## 1. What Is Astra CLI?
 
-Astra CLI (package name: `arc-cli`) is an **AI-native development companion** that brings **agentic coding capabilities** to your terminal. Rather than being a simple chatbot or code-completion engine, Astra gives a Large Language Model (LLM) **full programmatic access** to your filesystem, shell, and the web — all gated behind a **carefully designed approval system** that keeps the human developer in control at all times.
+Astra CLI (package name: `astrabot`) is an **AI-native development companion** that brings **agentic coding capabilities** to your terminal. Rather than being a simple chatbot or code-completion engine, Astra gives a Large Language Model (LLM) **full programmatic access** to your filesystem, shell, and the web — all gated behind a **carefully designed approval system** that keeps the human developer in control at all times.
 
 It is built on **[Bun](https://bun.sh)** (a fast JavaScript/TypeScript runtime), uses **[OpenRouter](https://openrouter.ai)** as its LLM provider (supporting any model available on that platform), and leverages the **[Vercel AI SDK](https://sdk.vercel.ai)**'s `ToolLoopAgent` for autonomous, multi-step tool-driven workflows.
 
@@ -69,7 +69,7 @@ A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 - **Skill system** — discover and load `SKILL.md` files from Cursor (`~/.cursor/skills-cursor`) and Claude (`~/.claude/skills`) skill directories, plus custom directories via `SKILLS_DIRS` env var
 - **Configurable safety** — exclude patterns (e.g., `node_modules`, `.git`, `dist`, `build`, `.next`, `*.log`, `.env*`), file size limits (default 1 MB), and per-tool permission toggles per agent role
 - **Session management** — sessions are persisted to disk with context summaries, enabling resumption after interruption
-- **Session tools** — `session_status` and `session_history` built-in tools the agent can call to recall previous work
+- **Session tools** — `session_status`, `session_search`, and `session_resume_context` built-in tools the agent can call to recall previous work
 - **Rich terminal UI** — interactive prompts via `@clack/prompts`, markdown rendering in the terminal via `marked` + `marked-terminal`, a figlet ASCII banner on startup, animated spinners with live token telemetry and elapsed time, streaming output display, and colored logging
 - **Multi-model support** — per-agent model override in Multi-Agent mode (different agents can use different LLMs)
 - **Retry on failure** — configurable retry logic for flaky AI provider calls and multi-agent step failures
@@ -102,7 +102,7 @@ bun install
 | `setup` | `bun run index.ts setup` | Interactive configuration wizard |
 | `wakeup` | `bun run index.ts wakeup` | Show banner and mode selection |
 
-The package is also configured as a binary (`bin.astra = "./index.ts"`) so it can be linked globally.
+The package is also configured as a binary (`bin.astra = "./bin/astra"`) so it can be linked globally or installed via npm.
 
 ---
 
@@ -155,6 +155,19 @@ Running `bun run index.ts setup` launches an interactive configuration wizard th
 
 Astra uses **Commander** (`commander@^15.0.0`) for CLI argument parsing.
 
+### `astra` (Default Action — Auto-Router)
+
+```
+astra [prompt...]
+```
+
+The default action (no subcommand) uses Commander's variadic `[prompt...]` argument:
+
+- **With prompt:** `astra "fix the bug"` → joins the words, passes the string to `runAutoMode()` as a pre-captured goal, skips the interactive goal prompt, and runs the auto-router silently.
+- **Without prompt:** `astra` → falls back to `runWakeup()`, showing the animated banner and top-level mode selection.
+
+This is the fastest way to get work done: `astra "your task here"` classifies intent and dispatches to the right mode automatically.
+
 ### `astra wakeup`
 
 ```
@@ -162,7 +175,7 @@ bun run index.ts wakeup
 ```
 
 Displays the ASCII art banner and presents a top-level mode selection menu:
-- **CLI** → enters the CLI mode loop (Agent / Plan / Ask / Multi-Agent)
+- **CLI** → enters the CLI mode loop (Auto / Agent / Plan / Ask / Multi-Agent)
 - **Telegram** → placeholder (not yet implemented)
 - **Exit** → quits
 
@@ -175,6 +188,22 @@ bun run index.ts setup
 ```
 
 Interactive configuration wizard for API keys and settings.
+
+### `astra play`
+
+```
+bun run index.ts play
+```
+
+Launches the arcade easter egg — an interactive game selector (Retro Snake Classic, Neon Brick Breaker, Neon Pong). Spawns a local Bun HTTP server on port `4321` and opens the game in the default browser.
+
+### `astra reset`
+
+```
+bun run index.ts reset
+```
+
+Interactive danger-zone command that completely purges all stored configurations, sessions, and credentials from `~/.astra/`. Requires explicit confirmation.
 
 ---
 
@@ -190,13 +219,14 @@ Interactive configuration wizard for API keys and settings.
 4. The screen is cleared and re-rendered in a `while(true)` loop
 5. **Session resume check:** Before the mode menu, `getResumableSession(cwd)` checks `~/.astra/sessions/index.json` for the most recent session. If it has `status === "interrupted"`, the user is offered to resume it. On resume, the session ID is stored in `globalThis.__ASTRA_RESUME_SESSION__` and `runCliMode()` is called directly.
 6. The mode selection prompt uses `@clack/prompts`' `select()` with options: **CLI**, **Telegram**, **Exit**
-7. After a CLI mode session completes, the loop restarts from the top (clearing screen, re-printing banner)
+7. **Default action without subcommand:** When `astra` is run without a subcommand, Commander's default action handler checks for `[prompt...]` arguments. If a prompt is provided, it runs `runAutoMode(combinedGoal)` directly. If not, it falls back to `runWakeup()`.
 
 ### 6.2 CLI Mode Loop
 
 **File:** `modes/cli.ts`
 
 An infinite `while(true)` loop presents a `@clack/prompts` `select()` with:
+- **Auto Mode** → calls `runAutoMode()`
 - **Agent Mode** → calls `runAgentMode()`
 - **Plan Mode** → calls `runPlanMode()`
 - **Ask Mode** → calls `runAskMode()`
@@ -417,7 +447,7 @@ The tool system has **two layers**:
 
 3. **`createWebTools()`** (`modes/plan/web-tools.ts`) — Firecrawl-based web search, crawl, and fetch tools.
 
-4. **`createSessionTools()`** (`session/session-tools.ts`) — `session_status` and `session_history` tools injected into every agent.
+4. **`createSessionTools()`** (`session/session-tools.ts`) — `session_status`, `session_search`, and `session_resume_context` tools injected into every agent.
 
 ### Complete Tool List
 
@@ -598,7 +628,7 @@ Sessions are stored in `~/.astra/sessions/index.json` as a JSON file with:
 interface SessionStoreIndex {
     version: number          // currently 1
     sessions: SessionEntry[]
-    maxSessions: number      // 50
+    maxSessions: number      // 100
 }
 ```
 
@@ -610,16 +640,20 @@ Writes are **atomic**: data is written to a temp file (`index.json.tmp_PID_TIMES
 interface SessionEntry {
     id: string               // e.g., "sess_m5k2x3_abc123"
     workspacePath: string    // absolute path
-    mode: 'agent' | 'ask' | 'plan' | 'multi'
+    mode: 'agent' | 'ask' | 'plan' | 'multi' | 'auto'
     status: 'active' | 'completed' | 'interrupted'
     summary: string          // LLM-generated summary
     lastGoal: string         // the user's prompt/goal
+    allGoals: string[]       // all user goals tracked across the session
     touchedFiles: string[]   // unique file paths touched
     appliedActions: number
     rejectedActions: number
     createdAt: string         // ISO-8601
     updatedAt: string        // ISO-8601
     previousSessionId?: string  // chaining support
+    transcript?: TranscriptMessage[]  // full conversation transcript (capped at 60)
+    pendingTasks?: string[]  // incomplete tasks for resumption
+    lastAgentResponse?: string  // last agent response (truncated to 2000 chars)
 }
 ```
 
@@ -641,8 +675,9 @@ Injected into every agent:
 
 | Tool | Description |
 |------|-------------|
-| `session_status` | Lists recent 5 sessions with mode, goal preview, and status |
-| `session_history` | Takes `session_id`, returns full context summary from `buildContextSummary()` |
+| `session_status` | Accepts optional `limit` (1–20, default 5). Shows recent sessions with ID, summary, and pending tasks. |
+| `session_search` | Search previous sessions by keyword, file name, or goal across `lastGoal`, `summary`, `touchedFiles`, and `allGoals`. |
+| `session_resume_context` | Takes `session_id` and optional `transcript_turns` (1–30, default 10). Returns full resumption context block. |
 
 ### Context Summary Format
 
@@ -745,15 +780,15 @@ Four predefined templates:
 ## 12. Project Structure — Every File
 
 ```
-astra-cli/                          # Project root
-├── index.ts                        # CLI entry point (Commander). Registers "wakeup" and "setup" commands.
-├── package.json                    # Dependencies, scripts, bin config. Package name: "astra", version 0.1.0.
+astrabot/                           # Project root
+├── index.ts                        # CLI entry point (Commander). Registers all commands including default action with `[prompt...]` argument.
+├── package.json                    # Package config: name "astrabot", bin "astra", dependencies.
 ├── tsconfig.json                   # TS config: ESNext, strict, Bun types, bundler module resolution.
-├── bun.lock                        # Bun lockfile. Workspace name: "arc-cli".
-├── .gitignore                      # Ignores: node_modules, dist, .env*, .astra/sessions/, coverage, logs, etc.
-├── README.md                       # Existing project overview.
+├── bun.lock                        # Bun lockfile.
+├── .gitignore                      # Standard ignores + private/
+├── .npmignore                      # Excludes tests, .github, sandbox_home, private from npm package.
 │
-├── ai/                             # AI provider configuration and utilities.
+├── bin/astra                       # Binary entry point (shebang: #!/usr/bin/env bun)
 │   ├── index.ts                    # Re-exports getAgentModel from ai.config.ts.
 │   ├── ai.config.ts                # Creates OpenRouter provider and returns model instance.
 │   │                                # Validates OPENROUTER_API_KEY and OPENROUTER_DEFAULT_MODEL env vars.
@@ -840,21 +875,22 @@ astra-cli/                          # Project root
 │   ├── index.ts                    # Public API re-exports from all session modules.
 │   ├── store.ts                    # JSON file store at ~/.astra/sessions/index.json.
 │   │                                # Atomic writes (temp file + rename). CRUD operations: create, read, update, delete.
-│   │                                # Max 50 sessions, pruned on creation.
+│   │                                # Max 100 sessions with pruning. Schema version 2 with back-compat migration.
 │   ├── session-manager.ts          # beginSession(), endSession(), endMultiSession(), markSessionInterrupted().
 │   │                                # LLM-powered summarisation (falls back to template).
 │   │                                # formatSessionLine(): status icon + age + mode tag + goal preview.
 │   │                                # getResumableSession(), getSessionHistory(), removeSession().
 │   ├── session-context.ts          # captureSessionContext(), buildContextSummary().
 │   │                                # Extracts active files and builds human-readable summary.
-│   └── session-tools.ts            # createSessionTools(): session_status and session_history tools.
+│   └── session-tools.ts            # createSessionTools(): session_status, session_search, session_resume_context tools.
 │
-└── game/                           # Standalone game (not part of CLI).
-    └── index.html                  # 🐍 Snake game built with HTML5 Canvas.
-                                    # Features: gradient backgrounds, glow effects, snake eyes,
-                                    # input queue for rapid direction changes, high score in localStorage,
-                                    # mobile touch controls, pause/resume, game over screen with win condition,
-                                    # High DPI support, auto-increasing speed.
+└── game/                           # Arcade easter egg.
+    ├── index.html                  # 🐍 Retro Snake Classic (HTML5 Canvas).
+    │                                # Features: gradient backgrounds, glow effects, snake eyes,
+    │                                # input queue, high score in localStorage, mobile touch controls,
+    │                                # pause/resume, game over screen, High DPI support.
+    ├── neon-breaker.html           # 🧱 Neon Brick Breaker (HTML5 Canvas).
+    └── neon-pong.html              # 🏓 Neon Pong (HTML5 Canvas).
 ```
 
 ### Notable Excluded Files (.gitignore)
@@ -866,6 +902,7 @@ astra-cli/                          # Project root
 - `.eslintcache`, `.cache`, `*.tsbuildinfo`
 - `.idea`, `.DS_Store`
 - `.astra/sessions/`
+- `private/`
 
 ---
 
@@ -910,9 +947,10 @@ astra-cli/                          # Project root
 
 From the README:
 
+- [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
+- [x] ~~**Direct prompt argument**~~ — implemented: `astra "goal"` auto-runs via the auto-router, bypassing the interactive menu
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
-- [ ] **Streaming token output** — for real-time agent response display
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode
 - [ ] **Multi-model support with per-mode model selection** — partially implemented in multi-agent mode only
 - [ ] **Persistent action history across sessions** — sessions store summaries but not full action logs
@@ -931,7 +969,7 @@ User Input (goal)
 │  ToolExecutor    │◄──── Staging Overlay (Map + Set)
 │  ActionTracker   │◄──── Append-only ActionLog[]
 └────────┬────────┘
-         │ agent.generate()
+         │ agent.stream()
          ▼
 ┌─────────────────┐
 │  ToolLoopAgent   │──── 35+ tools available

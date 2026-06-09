@@ -10,10 +10,11 @@ import { withSpinner } from "../tui/spinner";
 import { beginSession, endSession } from "../session";
 import { ActionTracker } from "./agent/action-tracker"; // Adjust path if ActionTracker is located elsewhere
 
-export async function runAutoMode() {
-    console.log(chalk.bold("\n  ✨ Auto-Routing Session\n"));
+export async function runAutoMode(preCapturedGoal?: string) {
+    if(!preCapturedGoal) console.log(chalk.bold("\n  ✨ Auto-Routing Session\n"));
+    else console.log()
 
-    const goal = await text({
+    const goal = preCapturedGoal ?? await text({
         message: "What would you like to do?",
         placeholder: "Type anything (e.g., 'fix the bug in store.ts' or 'explain how this app works')...",
     });

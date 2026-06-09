@@ -116,7 +116,7 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **Colored logging** — green for agent actions, cyan for ask mode, yellow for warnings, red for errors
 
 ### 🎮 Easter Egg
-- **Arcade mini-games** — Retro Snake Classic (HTML5 Canvas), Neon Brick Breaker, and Cosmic Drifter (space shooter with 4 weapons, boss fights, and XP leveling), served via Bun's native HTTP server
+- **Arcade mini-games** — Retro Snake Classic (HTML5 Canvas), Neon Brick Breaker, and Neon Pong, served via Bun's native HTTP server
 
 ---
 
@@ -155,6 +155,7 @@ You can now run Astra from any directory:
 cd /path/to/your/project
 astra setup      # Configure API keys
 astra wakeup     # Launch the interactive menu
+astra "fix the bug"  # Direct auto-router execution
 ```
 
 To update to the latest version:
@@ -182,6 +183,9 @@ npx astrabot wakeup
 
 # Show the version
 npx astrabot --version
+
+# Run auto-router with a direct prompt
+npx astrabot "explain how this works"
 
 # Launch the arcade easter egg
 npx astrabot play
@@ -230,10 +234,11 @@ astra setup
 # 3. Navigate to your project
 cd /path/to/your/project
 
-# 4. Launch Astra
+# 4. Launch Astra — interactive menu or direct prompt
 astra wakeup
+astra "fix the bug in store.ts"
 
-# 5. Choose a mode:
+# 5. If using interactive mode:
 #    → Interactive CLI Mode → select Agent / Ask / Plan / Multi-Agent / Auto
 #    → Follow the prompts and approve changes when asked
 ```
@@ -298,6 +303,27 @@ You can re-run `astra setup` at any time to update your configuration.
 
 ## Commands
 
+### `astra` (Default — Auto-Router)
+
+```bash
+astra [prompt...]
+```
+
+When called without a subcommand, Astra runs the **auto-router** by default:
+
+- **With a prompt argument** — `astra "fix the bug in store.ts"` immediately classifies your request and routes it to the most appropriate mode (agent, ask, plan, or multi-agent). No interactive menu is shown.
+- **Without arguments** — falls back to the interactive wakeup menu (same as `astra wakeup`).
+
+```bash
+# Direct execution — auto-router picks the right mode
+astra "explain how authentication works"
+astra "refactor the database layer"
+astra "create a REST API with Express"
+
+# Interactive menu (no arguments)
+astra
+```
+
 ### `astra wakeup`
 
 ```bash
@@ -330,6 +356,7 @@ Launches the arcade easter egg — an interactive game selector that lets you ch
 
 - **Retro Snake Classic** — full Snake game with gradient backgrounds, glow effects, snake eyes, input queue, high score in localStorage, mobile touch controls, pause/resume, and High DPI support
 - **Neon Brick Breaker** — Brick Breaker game built with HTML5 Canvas
+- **Neon Pong** — Pong game built with HTML5 Canvas
 
 A local Bun HTTP server is spawned on port `4321` and the game is automatically opened in your default browser.
 
@@ -821,7 +848,8 @@ astrabot/
 │
 ├── game/                           # Arcade easter egg.
 │   ├── index.html                  # Retro Snake Classic (HTML5 Canvas).
-│   └── neon-breaker.html           # Neon Brick Breaker (HTML5 Canvas).
+│   ├── neon-breaker.html           # Neon Brick Breaker (HTML5 Canvas).
+│   └── neon-pong.html              # Neon Pong (HTML5 Canvas).
 │
 └── tests/
     └── cli.test.ts                 # CLI tests.

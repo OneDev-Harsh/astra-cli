@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+#### Direct prompt argument & default auto-router (unreleased)
+
+- **Default action with auto-router** — Running `astra` without a subcommand now launches the interactive wakeup menu by default. Passing a prompt directly (e.g., `astra "fix the bug in store.ts"`) immediately runs auto mode with the provided goal, bypassing the interactive prompt.
+- **`[prompt...]` variadic argument** — The CLI accepts an optional variadic `[prompt...]` argument via Commander. Words are joined with spaces and forwarded to `runAutoMode()` as a pre-captured goal. If no arguments are provided, falls back to `runWakeup()`.
+- **`runAutoMode(preCapturedGoal?)`** — Auto mode now accepts an optional `preCapturedGoal` parameter. When provided, skips the interactive "What would you like to do?" prompt and uses the pre-captured string directly. The auto-routing header is also suppressed for a cleaner non-interactive experience.
+- **Neon Pong arcade game** — New `game/neon-pong.html` — a Pong game built with HTML5 Canvas (34,201 bytes), added to the arcade game selector.
+- **`.gitignore` / `.npmignore` update** — Added `private` directory to both ignore files.
+
 ### Roadmap (planned, not yet implemented)
 
 - **Telegram mode** — stub present in wakeup menu, not yet implemented
@@ -32,9 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Multi-agent streaming events** — New orchestrator event types: `agent:stream_start`, `agent:chunk`, `tool_executed`, `usage_updated` — enabling real-time UI updates during multi-agent execution.
 - **Auto mode elapsed time** — Auto mode spinner now shows elapsed time (`hideTime: false`) for better feedback during intent classification.
 
-#### Arcade games (4d69d27 — 2026-06-08)
+#### Arcade (4d69d27 — 2026-06-08)
 
-- **Cosmic Drifter** — New arcade game (`game/cosmic-drifter.html`) — a space shooter with WASD movement, mouse aiming, 4 weapons (Pulse Cannon, Plasma Beam, Scatter Gun, Void Cannon), 2 abilities (Nova Burst, Time Warp), boss fights every 5 waves, XP/leveling system, minimap, combo system, shield/dash mechanics, and audio synthesis via Web Audio API.
+- **Neon Pong** — New arcade game (`game/neon-pong.html`) — a Pong game built with HTML5 Canvas.
 
 #### Version update (2753487 — 2026-06-08)
 
