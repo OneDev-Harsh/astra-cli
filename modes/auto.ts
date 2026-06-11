@@ -1,5 +1,5 @@
 import { text } from "@clack/prompts";
-import { generateText, stepCountIs } from "ai";
+import { generateText } from "ai";
 import chalk from "chalk";
 import { getAgentModel } from "../ai";
 import { runAgentMode } from "./agent/orchestrator";
@@ -8,11 +8,31 @@ import { runPlanMode } from "./plan/orchestrator";
 import { runMultiAgentMode } from "./multi/orchestrator";
 import { withSpinner } from "../tui/spinner";
 import { beginSession, endSession } from "../session";
-import { ActionTracker } from "./agent/action-tracker"; // Adjust path if ActionTracker is located elsewhere
+import { ActionTracker } from "./agent/action-tracker";
+
+// Speed optimization: Local fast-path keyword evaluation rules
+function getFastPathIntent(goal: string): "agent" | "ask" | "plan" | "multi" | null {
+    const clean = goal.toLowerCase().trim();
+    
+    // Explicit ask indicators (questions, descriptions, explanations)
+    if (/^(what|how|why|explain|tell me|who|where|is there|can you explain)/i.test(clean)) return "ask";
+    if (clean.endsWith('?')) return "ask";
+
+    // Explicit planning layout/checklist indicators
+    if (/^(plan|checklist|architecture|design|layout|steps to|roadmap|structure for)/i.test(clean)) return "plan";
+
+    // Explicit multi-agent swarm configurations
+    if (/^(swarm|multi-agent|pipeline|concurrent|workers|agents|team of)/i.test(clean)) return "multi";
+
+    // Explicit execution/file edits 
+    if (/^(fix|modify|delete|refactor|write|create|run|build|test|add to)/i.test(clean)) return "agent";
+
+    return null; // Fallback to LLM if ambiguous
+}
 
 export async function runAutoMode(preCapturedGoal?: string) {
     if(!preCapturedGoal) console.log(chalk.bold("\n  ✨ Auto-Routing Session\n"));
-    else console.log()
+    else console.log();
 
     const goal = preCapturedGoal ?? await text({
         message: "What would you like to do?",
@@ -30,41 +50,47 @@ export async function runAutoMode(preCapturedGoal?: string) {
         goal: trimmedGoal,
     });
 
-    // Create a generic tracker instance to satisfy endSession requirements
     const autoTracker = new ActionTracker();
     let routedMode: "agent" | "ask" | "plan" | "multi" = "agent";
 
     try {
-        routedMode = await withSpinner(
-            {
-                message: "Analysing request intent...",
-                hideTime: false,
-            },
-            async () => {
-                const result = await generateText({
-                    model: getAgentModel(),
-                    stopWhen: stepCountIs(1),
-                    prompt: [
-                        "You are an intent classification router for a development workflow environment.",
-                        "Classify the following user request into exactly one of these 4 options:",
-                        "- 'ask': User is asking questions, needs code explanations, or conceptual help without needing file edits.",
-                        "- 'plan': User wants structural architectural layout designs or step-by-step checklists before writing code.",
-                        "- 'multi': User explicitly requests multi-agent swarms or concurrent pipeline workers.",
-                        "- 'agent': User wants to write code, modify files, delete files, refactor items, or run workspace terminal tasks.",
-                        "",
-                        `Request: "${trimmedGoal}"`,
-                        "",
-                        "Respond with exactly one word from the choices: ask, plan, multi, agent. Do not include markdown formatting or punctuation.",
-                    ].join("\n"),
-                });
+        // Fast-path evaluation execution before displaying spin elements 
+        const fastIntent = getFastPathIntent(trimmedGoal);
+        
+        if (fastIntent) {
+            routedMode = fastIntent;
+        } else {
+            // Only trigger spinner and network call if local regex fails
+            routedMode = await withSpinner(
+                {
+                    message: "Analysing request intent...",
+                    hideTime: false,
+                },
+                async () => {
+                    const result = await generateText({
+                        model: getAgentModel(),
+                        // maxTokens is supported at runtime, but if the compiler blocks it, 
+                        // we use a tight prompt and temperature: 0 to ensure it stops immediately.
+                        temperature: 0, 
+                        prompt: [
+                            "Classify this developer workflow request into exactly one word: ask, plan, multi, agent.",
+                            "- ask: Questions, code explanations, conceptual help (no file edits).",
+                            "- plan: Architectural designs, checklists, step-by-step roadmaps.",
+                            "- multi: Multi-agent swarms or concurrent pipeline configurations.",
+                            "- agent: Modifying/writing files, refactoring code, or terminal actions.",
+                            `Request: "${trimmedGoal}"`,
+                            "Output single word choice only (no punctuation/markdown):"
+                        ].join("\n"),
+                    } as any); // Cast as any to bypass the overly strict CallSettings type definition
 
-                const word = result.text.trim().toLowerCase();
-                if (["ask", "plan", "multi", "agent"].includes(word)) {
-                    return word as "agent" | "ask" | "plan" | "multi";
+                    const word = result.text.trim().toLowerCase();
+                    if (["ask", "plan", "multi", "agent"].includes(word)) {
+                        return word as "agent" | "ask" | "plan" | "multi";
+                    }
+                    return "agent";
                 }
-                return "agent";
-            }
-        );
+            );
+        }
     } catch {
         routedMode = "agent";
     }

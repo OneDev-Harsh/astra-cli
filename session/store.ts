@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { getConfigDir } from "../ai/config-loader";
 import type { ActionLog } from "../modes/agent/types";
+import { getSessionStoreCache, resetSessionStoreCache } from "./session-cache";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -93,59 +94,32 @@ function atomicWrite(filePath: string, data: string): void {
   fs.renameSync(tmp, filePath);
 }
 
-// ── Index Operations ───────────────────────────────────────────────────────
+// ── Cache Access ───────────────────────────────────────────────────────────
 
-function readIndex(): SessionStoreIndex {
-  if (!fs.existsSync(INDEX_FILE)) {
-    return { version: CURRENT_VERSION, sessions: [], maxSessions: MAX_SESSIONS };
-  }
-  try {
-    const raw = fs.readFileSync(INDEX_FILE, "utf8");
-    const parsed = JSON.parse(raw) as SessionStoreIndex;
-    // Back-compat: fill missing fields from older entries
-    for (const s of parsed.sessions) {
-      s.allGoals ??= [s.lastGoal];
-      s.transcript ??= [];
-      s.pendingTasks ??= [];
-      s.lastAgentResponse ??= "";
-    }
-    parsed.sessions.sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    );
-    return parsed;
-  } catch {
-    return { version: CURRENT_VERSION, sessions: [], maxSessions: MAX_SESSIONS };
-  }
-}
-
-function writeIndex(index: SessionStoreIndex): void {
-  atomicWrite(INDEX_FILE, JSON.stringify(index, null, 2));
+/** Get the singleton cache instance for the session store. */
+function cache() {
+  return getSessionStoreCache(INDEX_FILE);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
+// All functions maintain the exact same signatures as before.
+// The cache layer is transparent to callers.
 
 export function listSessions(
   workspacePath?: string,
   limit = 20
 ): SessionEntry[] {
-  const index = readIndex();
-  let sessions = index.sessions;
-  if (workspacePath) {
-    const root = path.resolve(workspacePath);
-    sessions = sessions.filter((s) => path.resolve(s.workspacePath) === root);
-  }
-  return sessions.slice(0, limit);
+  return cache().listEntries(workspacePath, limit);
 }
 
 export function getSession(id: string): SessionEntry | undefined {
-  const index = readIndex();
-  return index.sessions.find((s) => s.id === id);
+  return cache().getEntry(id);
 }
 
 export function getMostRecentSession(
   workspacePath?: string
 ): SessionEntry | undefined {
-  return listSessions(workspacePath, 1)[0];
+  return cache().getMostRecent(workspacePath);
 }
 
 export function createSession(input: {
@@ -173,8 +147,12 @@ export function createSession(input: {
     previousSessionId: input.previousSessionId,
   };
 
-  const index = readIndex();
-  index.sessions.unshift(entry);
+  // Use cache for the write path
+  const c = cache();
+  c.addEntry(entry);
+
+  // Enforce MAX_SESSIONS limit
+  const index = c.getIndex();
   if (index.sessions.length > MAX_SESSIONS) {
     const removed = index.sessions.splice(MAX_SESSIONS);
     for (const r of removed) {
@@ -184,8 +162,10 @@ export function createSession(input: {
         /* ignore */
       }
     }
+    // Mark dirty again since we modified
+    (c as any).markDirty();
   }
-  writeIndex(index);
+
   return entry;
 }
 
@@ -194,23 +174,24 @@ export function updateSession(
   patch: Partial<Omit<SessionEntry, "id" | "createdAt">>,
   actions?: readonly ActionLog[]
 ): SessionEntry | undefined {
-  const index = readIndex();
-  const entry = index.sessions.find((s) => s.id === id);
+  const c = cache();
+  const entry = c.getEntry(id);
   if (!entry) return undefined;
 
   // Merge transcript carefully: cap at TRANSCRIPT_CAP
   if (patch.transcript) {
     const merged = [...entry.transcript, ...patch.transcript];
-    patch.transcript = merged.slice(-TRANSCRIPT_CAP);
+    patch = { ...patch, transcript: merged.slice(-TRANSCRIPT_CAP) };
   }
 
   // Merge allGoals without duplicates
   if (patch.lastGoal && !entry.allGoals.includes(patch.lastGoal)) {
-    patch.allGoals = [...entry.allGoals, patch.lastGoal];
+    patch = { ...patch, allGoals: [...entry.allGoals, patch.lastGoal] };
   }
 
+  // Apply the patch
   Object.assign(entry, patch, { updatedAt: now() });
-  writeIndex(index);
+  c.updateEntry(id, {}); // mark dirty
 
   if (actions) {
     const historyFile = path.join(STORE_DIR, `${id}.json`);
@@ -223,38 +204,29 @@ export function updateSession(
 /**
  * Append transcript messages to an active session without a full patch.
  * More efficient for high-frequency updates during a live session.
+ * Uses the cache's optimized append path with debounced disk writes.
  */
 export function appendTranscript(
   id: string,
   messages: TranscriptMessage[]
 ): void {
-  const index = readIndex();
-  const entry = index.sessions.find((s) => s.id === id);
-  if (!entry) return;
-  entry.transcript.push(...messages);
-  if (entry.transcript.length > TRANSCRIPT_CAP) {
-    entry.transcript = entry.transcript.slice(-TRANSCRIPT_CAP);
-  }
-  entry.updatedAt = now();
-  writeIndex(index);
+  cache().appendTranscript(id, messages);
 }
 
 export function deleteSession(id: string): boolean {
-  const index = readIndex();
-  const idx = index.sessions.findIndex((s) => s.id === id);
-  if (idx === -1) return false;
-  index.sessions.splice(idx, 1);
-  writeIndex(index);
+  const c = cache();
+  const result = c.removeEntry(id);
   try {
     fs.unlinkSync(path.join(STORE_DIR, `${id}.json`));
   } catch {
     /* ignore */
   }
-  return true;
+  return result;
 }
 
 export function clearAllSessions(): number {
-  const index = readIndex();
+  const c = cache();
+  const index = c.getIndex();
   const count = index.sessions.length;
   for (const s of index.sessions) {
     try {
@@ -263,7 +235,10 @@ export function clearAllSessions(): number {
       /* ignore */
     }
   }
-  writeIndex({ version: CURRENT_VERSION, sessions: [], maxSessions: MAX_SESSIONS });
+  // Reset the cache entirely
+  c.invalidate();
+  const fresh: SessionStoreIndex = { version: CURRENT_VERSION, sessions: [], maxSessions: MAX_SESSIONS };
+  atomicWrite(INDEX_FILE, JSON.stringify(fresh, null, 2));
   return count;
 }
 
@@ -275,4 +250,20 @@ export function readSessionActions(id: string): ActionLog[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Flush all pending session writes to disk immediately.
+ * Called during graceful shutdown to ensure no data loss.
+ */
+export function flushSessionStore(): void {
+  cache().flushSync();
+}
+
+/**
+ * Reset the session store cache singleton.
+ * Exposed for testing purposes.
+ */
+export function _resetSessionStoreCache(): void {
+  resetSessionStoreCache();
 }
