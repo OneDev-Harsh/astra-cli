@@ -136,7 +136,7 @@ export async function runAskMode(preCapturedGoal?: string) {
     });
 
     const agent: any = new ToolLoopAgent({
-        model: getAgentModel(),
+        model: await getAgentModel(),
         stopWhen: stepCountIs(25),
         tools: {
             ...createReadOnlyTools(executor),

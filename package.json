@@ -24,6 +24,7 @@
     "setup": "bun run index.ts setup",
     "wakeup": "bun run index.ts wakeup",
     "test": "bun test",
+    "build": "bun build server/server.ts --outfile dist/server.js",
     "prepublishOnly": "bun test"
   },
   "devDependencies": {

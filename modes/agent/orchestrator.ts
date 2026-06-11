@@ -223,7 +223,7 @@ export async function runAgentMode(preCapturedGoal?: string) {
           ].join("\n");
 
     const agent = new ToolLoopAgent({
-        model: getAgentModel(),
+        model: await getAgentModel(),
         stopWhen: stepCountIs(50),
         instructions,
         tools,

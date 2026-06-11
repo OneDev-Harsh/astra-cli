@@ -96,9 +96,9 @@ export async function generatePlan(goal: string) {
       doneMessage: "plan ready",
       failMessage: "planning failed",
     },
-    () =>
+    async () =>
       generateText({
-        model: getAgentModel(),
+        model: await getAgentModel(),
         tools,
         stopWhen: stepCountIs(30),
         system: PLAN_INSTRUCTIONS(config.codebasePath, hasWeb),

@@ -189,7 +189,7 @@ export class MultiAgentOrchestrator {
     return this.workflow.agents[0]!.id;
   }
 
-  private _getModelForAgent(agentConfig: AgentConfig) {
+  private async _getModelForAgent(agentConfig: AgentConfig) {
     if (agentConfig.model) {
       orchestrationLogger.info(agentConfig.id, `Custom model: ${agentConfig.model}`);
       const apiKey = getEnv("OPENROUTER_API_KEY");
@@ -197,9 +197,9 @@ export class MultiAgentOrchestrator {
         throw new Error(`OPENROUTER_API_KEY not set for agent ${agentConfig.id}`);
       }
       const provider = createOpenRouter({ apiKey });
-      return provider(agentConfig.model);
+      return provider.chat(agentConfig.model);
     }
-    return getAgentModel();
+    return await getAgentModel();
   }
 
   private _buildSystemPrompt(agentConfig: AgentConfig): string {
@@ -287,7 +287,7 @@ export class MultiAgentOrchestrator {
     return { tracker, executor };
   }
 
-  private _initializeAgent(agentConfig: AgentConfig) {
+  private async _initializeAgent(agentConfig: AgentConfig) {
     orchestrationLogger.info(agentConfig.id, "Initializing");
 
     const { tracker, executor } = this._createExecutorForAgent(agentConfig);
@@ -296,7 +296,7 @@ export class MultiAgentOrchestrator {
 
     const allTools = createAgentTools(executor);
     const tools = this._filterToolsForAgent(allTools, agentConfig);
-    const model = this._getModelForAgent(agentConfig);
+    const model = await this._getModelForAgent(agentConfig);
 
     const agent = new ToolLoopAgent({
       model,
@@ -317,7 +317,7 @@ export class MultiAgentOrchestrator {
     const parts: string[] = [];
     parts.push(`Goal: ${this.workflow.goal}`);
     parts.push(`\nYour role: ${agentConfig.description}`);
-    parts.push(`Your role type: ${agentConfig.role}`);
+    parts.push(`\nYour role type: ${agentConfig.role}`);
 
     const recentMessages = this.state.sharedContext.conversationHistory.slice(-20);
     if (recentMessages.length > 0) {
@@ -406,7 +406,7 @@ export class MultiAgentOrchestrator {
       agentId: agentConfig.id,
     });
 
-    const executor = this._initializeAgent(agentConfig);
+    const executor = await this._initializeAgent(agentConfig);
     const agent = this.agents.get(agentConfig.id)!;
     const agentInstance = this.poolManager.getAgent(agentConfig.id)!;
     const tracker = this.trackers.get(agentConfig.id)!;

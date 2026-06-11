@@ -321,7 +321,7 @@ async function summariseSession(
 
   try {
     const result = await generateText({
-      model: getAgentModel(),
+      model: await getAgentModel(),
       stopWhen: stepCountIs(1),
       prompt: [
         "Summarise this coding session in 2-3 concise sentences.",

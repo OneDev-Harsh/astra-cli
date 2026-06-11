@@ -98,7 +98,7 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
 
   try {
     const analysisResponse = await generateText({
-      model: getAgentModel(),
+      model: await getAgentModel(),
       stopWhen: stepCountIs(1),
       prompt: [
         "You are an expert system architecture manager designing multi-agent software pipelines.",

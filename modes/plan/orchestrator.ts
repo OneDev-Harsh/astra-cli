@@ -233,7 +233,7 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
         console.log(chalk.bold(`\nStep: ${step.title}\n`));
 
         const agent = new ToolLoopAgent({
-            model: getAgentModel(),
+            model: await getAgentModel(),
             stopWhen: stepCountIs(50),
             tools,
         });

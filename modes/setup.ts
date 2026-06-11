@@ -1,36 +1,217 @@
 import chalk from "chalk";
-import { intro, outro, text, confirm, isCancel, autocomplete } from "@clack/prompts";
+import { intro, outro, text, confirm, isCancel, select } from "@clack/prompts";
 import {
   getEnv,
-  getConfigPath,
   saveConfig,
 } from "../ai/config-loader";
-import { withSpinner } from "../tui/spinner"; // Adjust path as necessary
+import {
+  enableSandboxMode,
+  disableSandboxMode,
+  isSandboxEnabled,
+  activateSandbox,
+  SANDBOX_MODEL,
+} from "../ai";
+import { withSpinner } from "../tui/spinner";
 
-// 1. Updated interface to include OpenRouter's exact pricing object structure
+// ── OpenRouter Model Interface ────────────────────────────────────────────
 interface OpenRouterModel {
   id: string;
   name: string;
-  architecture?: {
-    modality?: string;
-    output_modalities?: string[];
-  };
-  pricing?: {
-    prompt: string;      // Price per individual token
-    completion: string;  // Price per individual token
-  };
+  architecture?: { modality?: string; output_modalities?: string[] };
+  pricing?: { prompt: string; completion: string };
 }
+
+// ── Main Setup Flow ───────────────────────────────────────────────────────
 
 export async function runSetup(): Promise<void> {
   intro(chalk.bold("astra setup"));
 
+  const currentSandbox = isSandboxEnabled();
+
   console.log(
     chalk.dim(
-      `Config will be saved to ${getConfigPath()}\n` +
-        `Existing values will be preserved when possible.\n`
+      `Config: ~/.astra/.env\n` +
+        `Sandbox mode: ${currentSandbox ? chalk.green("active") : chalk.dim("inactive")}\n`
     )
   );
 
+  // ── Mode Selection ──────────────────────────────────────────────
+  const modeChoice = await select({
+    message: "Select configuration mode:",
+    options: [
+      {
+        value: "standard",
+        label: "Standard Mode",
+        hint: currentSandbox ? "switch from sandbox" : "API key in config file",
+      },
+      {
+        value: "sandbox",
+        label: "Sandbox Mode",
+        hint: currentSandbox ? "currently active" : "one-click secure setup",
+      },
+      {
+        value: "keep",
+        label: "Keep Current Settings",
+        hint: "don't change anything",
+      },
+    ],
+  });
+  if (isCancel(modeChoice)) return outro(chalk.dim("Setup cancelled."));
+
+  if (modeChoice === "keep") {
+    outro(chalk.dim("No changes made."));
+    return;
+  }
+
+  if (modeChoice === "sandbox") {
+    await runSandboxSetup();
+    return;
+  }
+
+  // Standard mode — disable sandbox if it was enabled
+  if (currentSandbox) {
+    await disableSandboxMode();
+    console.log(chalk.dim("  Sandbox mode disabled. Credentials purged from secure storage."));
+  }
+  await runStandardSetup();
+}
+
+// ── Sandbox Mode Setup (One-Click) ────────────────────────────────────────
+
+async function runSandboxSetup(): Promise<void> {
+  console.log();
+  console.log(chalk.bold.cyan("  🔒 Sandbox Mode"));
+  console.log(
+    chalk.dim(
+      "  One-click setup: the API key will be fetched from your\n" +
+        "  sandbox server and stored in your OS keychain (encrypted).\n" +
+        `  Model is set to ${chalk.white(SANDBOX_MODEL)}.\n`
+    )
+  );
+
+  // Check if server is running
+  let serverReady = false;
+  try {
+    const res = await fetch("http://127.0.0.1:3000/health", {
+      signal: AbortSignal.timeout(2000),
+    });
+    serverReady = res.ok;
+  } catch {
+    serverReady = false;
+  }
+
+  if (!serverReady) {
+    console.log(
+      chalk.yellow(
+        "\n  ⚠ Sandbox server is not reachable.\n" +
+          "  The sandbox server is a separate service that must be\n" +
+          "  running before setup can complete.\n"
+      )
+    );
+
+    outro(
+      chalk.yellow(
+        `\n⚠ Sandbox setup incomplete.\n` +
+          `  Ensure the sandbox server is running, then run "astra setup" again.\n`
+      )
+    );
+    return;
+  }
+
+  // ── One-Click Activation ─────────────────────────────────────────
+  console.log();
+
+  let activationResult: { success: boolean; message: string };
+  try {
+    activationResult = await withSpinner(
+      {
+        message: "Activating sandbox mode...",
+        doneMessage: "Sandbox activated!",
+        failMessage: "Activation failed.",
+      },
+      async () => {
+        return activateSandbox();
+      }
+    );
+  } catch (err) {
+    activationResult = {
+      success: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  if (!activationResult.success) {
+    outro(chalk.red(`\n✗ ${activationResult.message}`));
+    return;
+  }
+
+  console.log(chalk.dim(`  ${activationResult.message}`));
+
+  // ── Optional: Firecrawl ─────────────────────────────────────────
+  const currentFirecrawl = getEnv("FIRECRAWL_API_KEY") ?? "";
+  const setFirecrawl = await confirm({
+    message: "Set Firecrawl API key? (optional — enables web search & crawl)",
+    initialValue: false,
+  });
+  if (isCancel(setFirecrawl)) return outro(chalk.dim("Setup cancelled."));
+
+  let firecrawlKey = currentFirecrawl;
+  if (setFirecrawl) {
+    const val = await text({
+      message: "Firecrawl API key",
+      placeholder: "fc-...",
+      initialValue: currentFirecrawl,
+      validate: (_v) => undefined,
+    });
+    if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
+    firecrawlKey = (val ?? "").trim();
+  }
+
+  // ── Optional: Skills Directories ────────────────────────────────
+  const currentSkillsDirs = getEnv("SKILLS_DIRS") ?? "";
+  const setSkills = await confirm({
+    message: "Set custom skills directories? (optional)",
+    initialValue: false,
+  });
+  if (isCancel(setSkills)) return outro(chalk.dim("Setup cancelled."));
+
+  let skillsDirs = currentSkillsDirs;
+  if (setSkills) {
+    const val = await text({
+      message: "Skills directories (semicolon-separated)",
+      placeholder: "/path/to/skills;/another/dir",
+      initialValue: currentSkillsDirs,
+      validate: (_v) => undefined,
+    });
+    if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
+    skillsDirs = (val ?? "").trim();
+  }
+
+  // ── Save optional entries ───────────────────────────────────────
+  const entries: Record<string, string> = {};
+  if (firecrawlKey) entries.FIRECRAWL_API_KEY = firecrawlKey;
+  if (skillsDirs) entries.SKILLS_DIRS = skillsDirs;
+  if (Object.keys(entries).length > 0) {
+    saveConfig(entries);
+  }
+
+  // ── Done ────────────────────────────────────────────────────────
+  outro(
+    chalk.green(
+      `\n✔ Sandbox mode configured!\n` +
+        `    Model: ${SANDBOX_MODEL}\n` +
+        `    Key storage: OS keychain (encrypted)\n` +
+        `\n` +
+        chalk.dim(`    Run: `) +
+        chalk.cyan(`astra wakeup`) +
+        `\n`
+    )
+  );
+}
+
+// ── Standard Mode Setup ───────────────────────────────────────────────────
+
+async function runStandardSetup(): Promise<void> {
   const currentKey = getEnv("OPENROUTER_API_KEY") ?? "";
   const currentModel = getEnv("OPENROUTER_DEFAULT_MODEL") ?? "";
   const currentFirecrawl = getEnv("FIRECRAWL_API_KEY") ?? "";
@@ -49,114 +230,93 @@ export async function runSetup(): Promise<void> {
       message: "OpenRouter API key",
       placeholder: "sk-or-...",
       initialValue: currentKey,
-      validate: (v) =>
-        (v ?? "").trim() ? undefined : "API key is required",
+      validate: (v) => ((v ?? "").trim() ? undefined : "API key is required"),
     });
     if (isCancel(val)) return outro(chalk.dim("Setup cancelled."));
-    apiKey = val.trim();
+    apiKey = (val ?? "").trim();
   }
 
-  // ── Fetching All OpenRouter Models Dynamically ───────────────────
-  let modelOptions: Array<{ value: string; label: string; hint?: string }> = [];
-
+  // ── Model Selection ─────────────────────────────────────────────
   const setModel = await confirm({
     message: "Set default OpenRouter model?",
     initialValue: !currentModel,
   });
   if (isCancel(setModel)) return outro(chalk.dim("Setup cancelled."));
 
+  let finalModelId = currentModel;
+
   if (setModel) {
+    let modelOptions: Array<{ value: string; label: string; hint?: string }> = [];
+
     try {
       modelOptions = await withSpinner(
         {
-          message: "Fetching all available OpenRouter models & pricing...",
-          doneMessage: "Loaded models successfully.",
-          failMessage: "Failed to fetch dynamic list. Dropping back to fallback entry.",
+          message: "Fetching available OpenRouter models...",
+          doneMessage: "Models loaded.",
+          failMessage: "Using manual entry.",
         },
         async () => {
           const response = await fetch("https://openrouter.ai/api/v1/models");
-          if (!response.ok) throw new Error("Failed to communicate with OpenRouter registry");
-          
+          if (!response.ok) throw new Error("Failed");
           const json = (await response.json()) as { data: OpenRouterModel[] };
-          
           return json.data
-            .filter((model) => {
-              const outModalities = model.architecture?.output_modalities;
-              const modalityStr = model.architecture?.modality || "";
-              
-              if (outModalities) return outModalities.includes("text");
-              if (modalityStr) return modalityStr.endsWith("->text");
-              
+            .filter((m) => {
+              const out = m.architecture?.output_modalities;
+              const mod = m.architecture?.modality || "";
+              if (out) return out.includes("text");
+              if (mod) return mod.endsWith("->text");
               return true;
             })
-            .map((model) => {
-              const provider = model.id.split("/")[0];
-              
-              // Convert price-per-token strings to a clean price per 1 Million tokens
-              const promptPriceNum = parseFloat(model.pricing?.prompt || "0") * 1_000_000;
-              const completionPriceNum = parseFloat(model.pricing?.completion || "0") * 1_000_000;
-
-              let pricingHint = "Free";
-              if (promptPriceNum > 0 || completionPriceNum > 0) {
-                pricingHint = `In: $${promptPriceNum.toFixed(2)}, Out: $${completionPriceNum.toFixed(2)} /1M`;
-              }
-
-              return {
-                value: model.id,
-                label: model.name || model.id,
-                hint: `${provider} (${pricingHint})`,
-              };
+            .map((m) => {
+              const provider = m.id.split("/")[0];
+              const pp = parseFloat(m.pricing?.prompt || "0") * 1_000_000;
+              const cp = parseFloat(m.pricing?.completion || "0") * 1_000_000;
+              const pricing = pp > 0 || cp > 0
+                ? `In: $${pp.toFixed(2)}, Out: $${cp.toFixed(2)} /1M`
+                : "Free";
+              return { value: m.id, label: m.name || m.id, hint: `${provider} (${pricing})` };
             });
         }
       );
-    } catch (error) {
-      modelOptions = []; 
-    }
-
-    let modelId = currentModel;
+    } catch { /* fallback to manual */ }
 
     if (modelOptions.length > 0) {
-      const selectedModel = await autocomplete({
-        message: "Select an OpenRouter text model (Type to search & compare pricing)",
-        options: [
-          ...modelOptions,
-          { value: "custom", label: "Custom Entry...", hint: "Type manual ID" }
-        ],
-        placeholder: "Search e.g. 'claude', 'gpt', 'llama'...",
+      const { select, isCancel: isCancel2 } = await import("@clack/prompts");
+      const selected = await select({
+        message: "Select a model (type to search):",
+        options: [...modelOptions, { value: "custom", label: "Custom Entry...", hint: "manual" }]
       });
-      if (isCancel(selectedModel)) return outro(chalk.dim("Setup cancelled."));
+      if (isCancel2(selected)) return outro(chalk.dim("Setup cancelled."));
 
-      if (selectedModel === "custom") {
-        const customVal = await text({
-          message: "Enter custom OpenRouter Model ID",
+      if (selected === "custom") {
+        const { text: text2, isCancel: isCancel3 } = await import("@clack/prompts");
+        const custom = await text2({
+          message: "Enter model ID",
           placeholder: "provider/model-name",
           initialValue: currentModel,
-          validate: (v) => ((v ?? "").trim() ? undefined : "Model ID is required"),
+          validate: (v) => ((v ?? "").trim() ? undefined : "Required"),
         });
-        if (isCancel(customVal)) return outro(chalk.dim("Setup cancelled."));
-        modelId = customVal.trim();
+        if (isCancel3(custom)) return outro(chalk.dim("Setup cancelled."));
+        finalModelId = (custom as string).trim();
       } else {
-        modelId = selectedModel as string;
+        finalModelId = selected as string;
       }
     } else {
-      const fallbackVal = await text({
+      const { text: text3, isCancel: isCancel4 } = await import("@clack/prompts");
+      const manual = await text3({
         message: "Enter OpenRouter Model ID",
         placeholder: "anthropic/claude-3.5-sonnet",
         initialValue: currentModel || "anthropic/claude-3.5-sonnet",
-        validate: (v) => ((v ?? "").trim() ? undefined : "Model ID is required"),
+        validate: (v) => ((v ?? "").trim() ? undefined : "Required"),
       });
-      if (isCancel(fallbackVal)) return outro(chalk.dim("Setup cancelled."));
-      modelId = fallbackVal.trim();
+      if (isCancel4(manual)) return outro(chalk.dim("Setup cancelled."));
+      finalModelId = (manual as string).trim();
     }
-    
-    var finalModelId = modelId;
-  } else {
-    var finalModelId = currentModel;
   }
 
-  // ── Firecrawl API Key (optional) ────────────────────────────────
+  // ── Firecrawl (optional) ────────────────────────────────────────
   const setFirecrawl = await confirm({
-    message: "Set Firecrawl API key? (optional — enables web search & crawl)",
+    message: "Set Firecrawl API key? (optional)",
     initialValue: false,
   });
   if (isCancel(setFirecrawl)) return outro(chalk.dim("Setup cancelled."));
@@ -184,7 +344,7 @@ export async function runSetup(): Promise<void> {
   if (setSkills) {
     const val = await text({
       message: "Skills directories (semicolon-separated)",
-      placeholder: "/path/to/skills;/another/dir (eg: E:\Projects\Astra\.skills)",
+      placeholder: "/path/to/skills;/another/path",
       initialValue: currentSkillsDirs,
       validate: (_v) => undefined,
     });
@@ -203,8 +363,8 @@ export async function runSetup(): Promise<void> {
 
   outro(
     chalk.green(
-      `\n✔ Configuration saved to ${getConfigPath()}\n` +
-        `    You can now run "astra wakeup" to get started.\n`
+      `\n✔ Configuration saved to ~/.astra/.env\n` +
+        `    Run "astra wakeup" to get started.\n`
     )
   );
 }

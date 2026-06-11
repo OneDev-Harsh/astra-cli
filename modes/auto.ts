@@ -13,7 +13,7 @@ import { ActionTracker } from "./agent/action-tracker";
 // Speed optimization: Local fast-path keyword evaluation rules
 function getFastPathIntent(goal: string): "agent" | "ask" | "plan" | "multi" | null {
     const clean = goal.toLowerCase().trim();
-    
+
     // Explicit ask indicators (questions, descriptions, explanations)
     if (/^(what|how|why|explain|tell me|who|where|is there|can you explain)/i.test(clean)) return "ask";
     if (clean.endsWith('?')) return "ask";
@@ -24,7 +24,7 @@ function getFastPathIntent(goal: string): "agent" | "ask" | "plan" | "multi" | n
     // Explicit multi-agent swarm configurations
     if (/^(swarm|multi-agent|pipeline|concurrent|workers|agents|team of)/i.test(clean)) return "multi";
 
-    // Explicit execution/file edits 
+    // Explicit execution/file edits
     if (/^(fix|modify|delete|refactor|write|create|run|build|test|add to)/i.test(clean)) return "agent";
 
     return null; // Fallback to LLM if ambiguous
@@ -54,9 +54,9 @@ export async function runAutoMode(preCapturedGoal?: string) {
     let routedMode: "agent" | "ask" | "plan" | "multi" = "agent";
 
     try {
-        // Fast-path evaluation execution before displaying spin elements 
+        // Fast-path evaluation execution before displaying spin elements
         const fastIntent = getFastPathIntent(trimmedGoal);
-        
+
         if (fastIntent) {
             routedMode = fastIntent;
         } else {
@@ -67,11 +67,12 @@ export async function runAutoMode(preCapturedGoal?: string) {
                     hideTime: false,
                 },
                 async () => {
+                    const model = await getAgentModel();
                     const result = await generateText({
-                        model: getAgentModel(),
-                        // maxTokens is supported at runtime, but if the compiler blocks it, 
+                        model,
+                        // maxTokens is supported at runtime, but if the compiler blocks it,
                         // we use a tight prompt and temperature: 0 to ensure it stops immediately.
-                        temperature: 0, 
+                        temperature: 0,
                         prompt: [
                             "Classify this developer workflow request into exactly one word: ask, plan, multi, agent.",
                             "- ask: Questions, code explanations, conceptual help (no file edits).",
@@ -97,8 +98,8 @@ export async function runAutoMode(preCapturedGoal?: string) {
 
     // 2. Finalize and log the router's decision phase into the store history trail
     await endSession(
-        sessionEntry.id, 
-        autoTracker, 
+        sessionEntry.id,
+        autoTracker,
         `Auto-router successfully mapped intent to down-stream [${routedMode}] engine.`
     );
 
