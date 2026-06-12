@@ -8,16 +8,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
-
-#### Direct prompt argument & default auto-router (unreleased)
-
-- **Default action with auto-router** — Running `astra` without a subcommand now launches the interactive wakeup menu by default. Passing a prompt directly (e.g., `astra "fix the bug in store.ts"`) immediately runs auto mode with the provided goal, bypassing the interactive prompt.
-- **`[prompt...]` variadic argument** — The CLI accepts an optional variadic `[prompt...]` argument via Commander. Words are joined with spaces and forwarded to `runAutoMode()` as a pre-captured goal. If no arguments are provided, falls back to `runWakeup()`.
-- **`runAutoMode(preCapturedGoal?)`** — Auto mode now accepts an optional `preCapturedGoal` parameter. When provided, skips the interactive "What would you like to do?" prompt and uses the pre-captured string directly. The auto-routing header is also suppressed for a cleaner non-interactive experience.
-- **Neon Pong arcade game** — New `game/neon-pong.html` — a Pong game built with HTML5 Canvas (34,201 bytes), added to the arcade game selector.
-- **`.gitignore` / `.npmignore` update** — Added `private` directory to both ignore files.
-
 ### Roadmap (planned, not yet implemented)
 
 - **Telegram mode** — stub present in wakeup menu, not yet implemented
@@ -25,6 +15,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Configurable tool allowlists per mode** — currently hardcoded per mode
 - **Multi-model support with per-mode model selection** — partially implemented in multi-agent mode only
 - **Persistent action history across sessions** — sessions store summaries but not full action logs
+
+---
+
+## [0.1.4] — 2026-07-02
+
+### Changed
+
+#### Server removed (de4f562 — 2026-07-02)
+
+- **Removed bundled server** — The `server/` directory was removed from the project. The sandbox mode's `activateSandbox()` function still supports connecting to an external sandbox server, but Astra no longer ships one.
+- **Build script updated** — `package.json` `build` script changed from `bun build server/server.ts --outfile dist/server.js` to `bun build index.ts --outfile dist/astra.js`.
+- **Version bump** — `package.json` version updated from `0.1.3` to `0.1.4`.
+
+---
+
+## [0.1.3] — 2026-07-01
+
+### Added
+
+#### Sandbox mode — secure one-click activation (2c1edb7 — 2026-07-01)
+
+- **Sandbox mode** — New `ai/sandbox-config.ts` module providing a secure, self-contained execution environment:
+  - **One-click activation** — `astra sandbox` command activates sandbox mode by connecting to a local sandbox server, fetching an API key, and storing it in the OS keychain.
+  - **Secure credential storage** — New `ai/secure-storage.ts` module using AES-256-GCM encryption with OS keychain fallback:
+    - Prefers native OS credential managers (macOS Keychain, Windows Credential Vault, Linux Secret Service via `keytar`)
+    - Falls back to an encrypted file at `~/.astra/.secure/sandbox.enc` using a device-bound key derived from machine-id via `scrypt`
+    - Supports storing/retrieving sandbox API key, auth token, and HMAC signing secret separately
+  - **HMAC request signing** — All sandbox server communication is signed with SHA-256 HMAC and timestamps for replay protection.
+  - **API key validation & sanitization** — Automatically strips brackets/quotes accidentally introduced by `.env` parsing, validates OpenRouter key format (`sk-or-v1-*`).
+  - **In-memory key caching** — Keys are cached in memory with a 5-minute TTL to avoid repeated server round-trips.
+  - **Server process management** — `startSandboxServer()` spawns and health-checks a sandbox server process.
+  - **Model override** — Sandbox mode uses a fixed model (`openrouter/owl-alpha`) and port (3000).
+  - **Full disable path** — `disableSandboxMode()` purges all credentials from secure storage and clears the boolean flag.
+  - **Public API** — `ai/index.ts` exports all sandbox and secure storage functions for programmatic use.
+
+#### Response time optimizations (2e111b6 — 2026-07-01)
+
+- **Session store cache** — New `session/session-cache.ts` module providing in-memory caching for the session store:
+  - **Debounced disk writes** — Writes are batched with a 500ms debounce interval to avoid redundant JSON serialization on rapid session updates.
+  - **LRU entry cache** — Individual session entries are cached by ID for O(1) lookups without file I/O.
+  - **Transcript caching** — Transcript append operations are served entirely from memory during live sessions.
+  - **Dirty tracking** — Only mutated entries are marked dirty; flush only writes when necessary.
+  - **Singleton pattern** — `getSessionStoreCache()` returns a shared instance; `resetSessionStoreCache()` for testing.
+  - **Synchronous flush option** — `flushSync()` for critical shutdown paths.
+
+#### Installer scripts (f0c6f06 — 2026-07-01)
+
+- **Cross-platform installers** — New `install/` directory with automated setup scripts:
+  - `install/install.sh` — Linux/macOS Bash installer that checks for and installs Node.js (via nvm), Bun, and `astrabot` npm package.
+  - `install/install.bat` — Windows Batch installer with PowerShell integration for Node.js and Bun installation.
+  - `install/README.md` — Documentation for the installer scripts.
+  - Both scripts handle PATH configuration, permission issues (sudo/prefix fallback), and guide users to run `astra setup` after installation.
+  - Auto-detect existing installations to skip unnecessary steps.
+
+#### Skills system (`.skills/`) — now documented
+
+- **Five built-in skills** — `.skills/` directory with structured `SKILL.md` files:
+  - `code-review` — Structured code review checklist (quality, error handling, security, performance, testing)
+  - `documentation` — Documentation standards and templates for README, CHANGELOG, and code comments
+  - `git-workflow` — Branch naming conventions, commit conventions (conventional commits), and workflow steps
+  - `project-setup` — Development environment setup guide
+  - `test-runner` — Test execution patterns and result interpretation
+- Skills are discoverable by agents via the `list_skills` and `read_skill` tools.
+
+#### Cosmic Drifter arcade game
+
+- **Cosmic Drifter** — Listed as an option in the `astra play` game selector (asset file existence-checked at runtime).
+
+### Changed
+
+#### Direct prompt argument & default auto-router improvements (4c8a1e9 — 2026-07-01)
+
+- **`astra sandbox` command** — New subcommand registered in `index.ts` for sandbox mode activation.
+- **Cosmic Drifter in arcade** — Added to the game selector options in `index.ts`.
+
+### Fixed
+
+- **Token streaming improvements** (3abca71 — 2026-07-01) — Minor fixes and improvements to the token streaming pipeline.
+- **Other minor fixes** (070c903 — 2026-07-01) — Small bug fixes and polish.
 
 ---
 
@@ -193,7 +262,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Documentation of current version (e7783c1 — 2026-06-03)
 
-- **DOCUMENTATION.md** — New comprehensive 1,005-line technical documentation covering every aspect of the system: architecture, all interaction modes, complete tool reference (35+ tools), staging & approval pipeline, action tracking, session management, multi-agent orchestration, project structure (every file), dependencies, roadmap, and data flow diagrams.
+- **DOCUMENTATION.md** — New comprehensive 1,005-line technical documentation covering every aspect of the system.
 - **Removed** `publishPrep.md` and `tools.md` (superseded by DOCUMENTATION.md).
 
 #### Workflow improved (0b3cdfc — 2026-06-03)
@@ -231,105 +300,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `types.ts` — Full type system: `AgentRole`, `AgentConfig`, `AgentMessage`, `AgentContext`, `AgentExecutionResult`, `OrchestrationStrategy`, `MultiAgentWorkflow`, `AgentPool`, `AgentInstance`, `OrchestratorState`, `CommunicationChannel`.
   - `agent-pool-manager.ts` — Agent registration, tracking, activation/deactivation, failure handling, message queuing, completion percentage, and stats.
   - `message-broker.ts` — Pub-sub communication channel with `broadcast()`, `subscribe()`, `getMessagesFor()`, `getConversation()`, `replayMessages()`.
-  - `multi-agent-orchestrator.ts` — Main orchestration engine (836 lines) with strategy dispatch for Sequential, Parallel, Hierarchical, and Collaborative strategies. Per-agent model support, role-based system prompts, tool filtering, executor configuration by role, prompt building with conversation history.
-  - `orchestrator.ts` — Multi-agent approval flow with per-agent review groups and diff display (690 lines).
-  - `workflow-builder.ts` — Fluent API (`addResearcher()`, `addImplementer()`, `addReviewer()`, `addCoordinator()`, `addCustomAgent()`) with strategy setters, retry config, and 10+ validation checks. Includes `WorkflowTemplates` with 4 predefined templates: codeReview, featureDevelopment, bugFixing, collaborativeResearch.
+  - `multi-agent-orchestrator.ts` — Main orchestration engine with strategy dispatch for Sequential, Parallel, Hierarchical, and Collaborative strategies. Per-agent model support, role-based system prompts, tool filtering, executor configuration by role, prompt building with conversation history.
+  - `orchestrator.ts` — Multi-agent approval flow with per-agent review groups and diff display.
+  - `workflow-builder.ts` — Fluent API (`addResearcher()`, `addImplementer()`, `addReviewer()`, `addCoordinator()`, `addCustomAgent()`) with strategy setters, retry config, and 10+ validation checks. Includes `WorkflowTemplates` with 4 predefined templates.
   - `examples.ts` — 5 example workflow configurations.
 - **CLI mode loop updated** — Added "Multi-Agent Mode" option to the mode selector.
-- **Agent tools refactored** — `createAgentTools()` now supports `afterCreateFile` hook for immediate approval during agent loop.
-- **Approval flow refactored** — `runApprovalFlow()` now accepts options for path filtering and batch prompt skipping.
 
 #### Plan mode upgrade (c67ae5a — 2026-06-01)
 
-- **Planner tool refactoring** — Replaced hand-written `readOnlyTools()` (7 individual tool definitions) with `createPlannerTools()` that derives read-only tools by destructuring mutation tools from `createAgentTools()`. This ensures the planner always stays in sync with the agent tool set.
-- **Removed `extractJsonMiddleware` and `wrapLanguageModel`** — Plan generation now uses the raw `getAgentModel()` directly instead of wrapping with JSON extraction middleware.
-- **Version bump** — Banner version updated from `v0.0.1` to `v0.1.0`.
-- **Plan orchestrator robustness** — Fixed empty text check (`r.text.trim()` instead of `r.text`), improved formatting.
+- **Planner tool refactoring** — Replaced hand-written `readOnlyTools()` with `createPlannerTools()` that derives read-only tools from `createAgentTools()`.
+- **Plan orchestrator robustness** — Fixed empty text check, improved formatting.
 
 #### More tools added to agent and ask mode (07edb48 — 2026-06-01)
 
-- **Agent tools expanded** — `modes/agent/agent-tools.ts` grew by 221 lines, adding new tool definitions to the Vercel AI SDK tool set.
-- **Tool executor expanded** — `modes/agent/tool-executor.ts` grew by 548 lines with new tool implementations.
-- **Ask mode orchestrator rework** — `modes/ask/orchestrator.ts` restructured (187 lines changed) with improved read-only tool filtering.
-- **Spinner enhancements** — `tui/spinner.ts` grew by 102 lines with additional features.
-- **tools.md** — New 201-line tool documentation file (later superseded by DOCUMENTATION.md).
+- **Agent tools expanded** — `modes/agent/agent-tools.ts` grew by 221 lines with new tool definitions.
+- **Tool executor expanded** — `modes/agent/tool-executor.ts` grew by 548 lines with new implementations.
+- **Ask mode orchestrator rework** — `modes/ask/orchestrator.ts` restructured with improved read-only tool filtering.
 
 #### API keys setup option added (1c0b18a — 2026-05-31)
 
-- **Setup wizard** — New `modes/setup.ts` (118 lines) — interactive configuration wizard that prompts for OpenRouter API key, default model, optional Firecrawl API key, and optional custom skills directories. Saves to `~/.astra/.env` with merge logic.
-- **Config loader** — New `ai/config-loader.ts` (100 lines) — manages `~/.astra/.env` file: loading via `dotenv`, reading env vars, and saving config with key=value merge and atomic updates.
-- **AI config improvements** — `ai/ai.config.ts` updated with better validation.
+- **Setup wizard** — New `modes/setup.ts` — interactive configuration wizard for API keys and settings.
+- **Config loader** — New `ai/config-loader.ts` — manages `~/.astra/.env` file.
 - **CLI entry point** — `index.ts` updated to register the `setup` command.
-- **Package.json updates** — Added `dotenv` dependency, `setup` script, and `bun.lock` updates.
-- **publishPrep.md** — New 267-line publish preparation document (later removed).
-- **Plan mode web tools rework** — `modes/plan/web-tools.ts` significantly restructured (215 lines changed).
-- **Planner refactoring** — `modes/plan/planner.ts` updated to use new config loader.
 
 #### Loader spinner add for steps (8a1cb38 — 2026-05-31)
 
-- **Animated spinner** — New `tui/spinner.ts` (39 lines) — animated spinner with 10 frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), 80ms interval, color palette (violet primary, grey dim, emerald success, red error, amber time), elapsed time formatting, and `withSpinner<T>()` async wrapper.
-- **Spinner integration** — All mode orchestrators updated to use spinners:
-  - Agent mode: "Agent is working on your task..."
-  - Ask mode: "Thinking..."
-  - Plan mode: "Generating plan..." and "Executing: <step title>"
-  - Planner: plan generation
-  - Web tools: search, crawl, and fetch operations
-- **Wakeup banner** — `tui/wakeup.ts` updated to show spinner during banner rendering ("Rendering banner…").
+- **Animated spinner** — New `tui/spinner.ts` with 10 frames, color palette, elapsed time formatting, and `withSpinner<T>()` async wrapper.
+- **Spinner integration** — All mode orchestrators updated to use spinners.
 
 #### README updated (7ce1a06 — 2026-05-31)
 
-- **Comprehensive README** — Grew from 15 lines to 272 lines, covering features, quick start, commands, all interaction modes (Agent, Ask, Plan, Multi-Agent), architecture overview, environment variables, project structure, dependencies, roadmap, and license.
+- **Comprehensive README** — Grew from 15 lines to 272 lines.
 
 #### MVP ready (0d14b27 — 2026-05-31)
 
-- **Plan mode** — New `modes/plan/` directory with 5 files:
-  - `types.ts` — `PlanStep` and `Plan` interfaces with complexity ratings.
-  - `planner.ts` — `generatePlan()` using LLM with `Output.object()` and Zod schema for structured plan generation (1–20 steps).
-  - `selection.ts` — `printPlan()` with color-coded complexity tags and `selectSteps()` using `@clack/prompts` multiselect.
-  - `web-tools.ts` — `createWebTools()` with Firecrawl-based `web_search`, `web_crawl`, and `fetch_url` tools.
-  - `orchestrator.ts` — `runPlanMode()`: goal → generate plan → display → select steps → execute each as independent agent → batch approval → apply.
-- **Ask mode improvements** — `modes/ask/orchestrator.ts` updated with markdown response formatting.
+- **Plan mode** — New `modes/plan/` directory with 5 files (types, planner, selection, web-tools, orchestrator).
+- **Ask mode improvements** — Markdown response formatting.
 - **CLI mode loop** — Added "Plan Mode" option.
-- **Package.json** — Added `@mendable/firecrawl-js` dependency.
 
 #### Ask mode implemented (c91b7c1 — 2026-05-31)
 
-- **Ask mode** — New `modes/ask/orchestrator.ts` (133 lines) — read-only Q&A interface:
-  - Question input via `@clack/prompts` text prompt
-  - Read-only tool set (all mutation tools stripped)
-  - `ToolLoopAgent` with max 25 steps
-  - Markdown rendering of answers in terminal
-  - Optional save to `.md` file with `## Question` / `## Answer` formatting
-  - Temporary file creation enablement for save step
-- **Approval flow enhanced** — `modes/agent/approval.ts` grew with per-file diff review, accept/reject per group, and diff viewing.
-- **Diff view** — New `modes/agent/diff-view.ts` (18 lines) — `formatPatch()` using `diff.createTwoFilesPatch()` with 3-line context and `composeBeforeAfter()` for multi-action sequences.
-- **Agent orchestrator** — Updated with markdown rendering of agent responses.
-- **CLI mode loop** — Added "Ask Mode" option.
-- **Package.json** — Added `marked` and `marked-terminal` dependencies.
+- **Ask mode** — New `modes/ask/orchestrator.ts` — read-only Q&A interface with optional `.md` save.
 
 #### Ready for approval flow implementation (ec0f258 — 2026-05-30)
 
-- **Agent mode foundation** — New `modes/agent/` directory with 6 files:
-  - `types.ts` — `ActionType`, `ActionStatus`, `ActionLog`, `AgentConfig` definitions, `defaultAgentConfig()` with 1MB max file size and standard exclude patterns.
-  - `action-tracker.ts` — `ActionTracker` class with append-only log, `log()`, `getActions()`, `getPendingMutations()`, `updateStatus()`.
-  - `agent-tools.ts` — `createAgentTools()` wrapping 35 `ToolExecutor` methods as Vercel AI SDK tools with Zod schemas.
-  - `tool-executor.ts` — `ToolExecutor` class (432 lines) — core execution engine with in-memory staging overlay (`Map<string, string>` for file contents, `Set<string>` for deletions), path safety validation, exclude pattern matching, file size limits, text file detection (40+ extensions), and `applyApprovedFromTracker()`.
-  - `approval.ts` — `runApprovalFlow()` with "Approve all" / "Review one by one" / "Cancel" options.
-  - `orchestrator.ts` — `runAgentMode()`: goal input → agent execution → approval → apply.
-- **CLI mode loop** — New `modes/cli.ts` (31 lines) — infinite loop with mode selection (Agent / Plan / Ask / Multi-Agent / Back).
-- **Terminal markdown** — New `tui/terminal-md.ts` (17 lines) — markdown-to-terminal rendering via `marked` + `marked-terminal` with auto-detected terminal width (40–120 chars).
-- **Wakeup banner** — New `tui/wakeup.ts` (58 lines) — figlet ASCII banner with "ANSI Shadow" font, gold color, version display, and top-level mode selection (CLI / Telegram / Exit).
-- **Package.json** — Added `@openrouter/ai-sdk-provider`, `ai`, `chalk`, `diff`, `zod` dependencies. Added `dev` and `wakeup` scripts.
+- **Agent mode foundation** — New `modes/agent/` directory with 6 files (types, action-tracker, agent-tools, tool-executor, approval, orchestrator).
+- **CLI mode loop** — New `modes/cli.ts` with mode selection.
+- **Terminal markdown** — New `tui/terminal-md.ts`.
+- **Wakeup banner** — New `tui/wakeup.ts` with figlet ASCII banner.
 
 #### First commit (551562f — 2026-05-29)
 
-- **Project scaffolding** — Initial 6 files:
-  - `package.json` — Package name `astra-cli`, version `0.0.1`, with `@clack/core`, `@clack/prompts`, `@types/node`, `commander`, `figlet` dependencies.
-  - `index.ts` — CLI entry point with Commander, registering a `wakeup` command that logs "Wakeup function...."
-  - `tsconfig.json` — TypeScript config: ESNext target, Preserve module, bundler resolution, strict mode, Bun types.
-  - `.gitignore` — Standard ignores (node_modules, dist, .env, etc.)
-  - `README.md` — 15-line basic readme.
-  - `bun.lock` — Bun lockfile.
+- **Project scaffolding** — Initial 6 files: `package.json`, `index.ts`, `tsconfig.json`, `.gitignore`, `README.md`, `bun.lock`.
 
 ---
 
@@ -337,13 +359,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 | Metric | Value |
 |--------|-------|
-| Total commits | 28 |
-| Development period | May 29 – June 8, 2026 (11 days) |
-| Total files created | 39+ |
-| Total lines of code | ~13,000+ |
+| Total commits | 34 |
+| Development period | May 29 – July 2, 2026 (35 days) |
+| Total files created | 45+ |
+| Total lines of code | ~15,000+ |
 | Interaction modes | 5 (Auto, Agent, Ask, Plan, Multi-Agent) |
 | Agent tools | 35+ |
 | Orchestration strategies | 5 (Sequential, Parallel, Hierarchical, Collaborative, DAG) |
 | Agent roles | 5 (Researcher, Implementer, Reviewer, Coordinator, Custom) |
 | Retry presets | 4 (aiCall, toolExecution, network, critical) |
 | Error categories | 7 (Transient, Permanent, Rate Limit, Network, Auth, Timeout, Unknown) |
+| Built-in skills | 5 (code-review, documentation, git-workflow, project-setup, test-runner) |
+| Arcade games | 4 (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Cosmic Drifter) |

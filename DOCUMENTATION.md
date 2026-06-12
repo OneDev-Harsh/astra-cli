@@ -1,6 +1,6 @@
 # Astra CLI — Complete Technical Documentation
 
-> **Version:** 0.1.2
+> **Version:** 0.1.4
 > **Runtime:** Bun (>=1.0.0)
 > **License:** MIT
 > **Package name:** `astrabot`
@@ -27,9 +27,11 @@
 9. [Action Tracking System](#9-action-tracking-system)
 10. [Session Management](#10-session-management)
 11. [Multi-Agent Orchestration](#11-multi-agent-orchestration)
-12. [Project Structure — Every File](#12-project-structure--every-file)
-13. [Dependencies](#13-dependencies)
-14. [Roadmap](#14-roadmap)
+12. [Sandbox Mode & Secure Storage](#12-sandbox-mode--secure-storage)
+13. [Skills System](#13-skills-system)
+14. [Project Structure — Every File](#14-project-structure--every-file)
+15. [Dependencies](#15-dependencies)
+16. [Roadmap](#16-roadmap)
 
 ---
 
@@ -49,7 +51,7 @@ Astra provides **five distinct interaction modes** within a CLI interface:
 | **Plan** | Structured multi-step planning with selective execution | Yes (staged) |
 | **Multi-Agent** | Multiple agents working together in configurable topologies | Yes (staged) |
 
-A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
+A standalone **arcade** with multiple mini-games (HTML canvas) is also included.
 
 ---
 
@@ -66,13 +68,15 @@ A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 - **Web research** — built-in web search (via DuckDuckGo curl or Firecrawl), URL crawling, and HTTP fetching
 - **Staging-first mutations** — no file is ever written or deleted without explicit user approval; all changes are staged in memory and presented for review before apply
 - **Per-file diff review** — granular approval flow with unified diffs so you can inspect exactly what changed
-- **Skill system** — discover and load `SKILL.md` files from Cursor (`~/.cursor/skills-cursor`) and Claude (`~/.claude/skills`) skill directories, plus custom directories via `SKILLS_DIRS` env var
+- **Skill system** — discover and load `SKILL.md` files from built-in skills (`.skills/`), Cursor (`~/.cursor/skills-cursor`), and Claude (`~/.claude/skills`) skill directories, plus custom directories via `SKILLS_DIRS` env var
 - **Configurable safety** — exclude patterns (e.g., `node_modules`, `.git`, `dist`, `build`, `.next`, `*.log`, `.env*`), file size limits (default 1 MB), and per-tool permission toggles per agent role
-- **Session management** — sessions are persisted to disk with context summaries, enabling resumption after interruption
+- **Session management** — sessions are persisted to disk with context summaries, enabling resumption after interruption. In-memory cache layer for fast reads/writes.
 - **Session tools** — `session_status`, `session_search`, and `session_resume_context` built-in tools the agent can call to recall previous work
 - **Rich terminal UI** — interactive prompts via `@clack/prompts`, markdown rendering in the terminal via `marked` + `marked-terminal`, a figlet ASCII banner on startup, animated spinners with live token telemetry and elapsed time, streaming output display, and colored logging
 - **Multi-model support** — per-agent model override in Multi-Agent mode (different agents can use different LLMs)
 - **Retry on failure** — configurable retry logic for flaky AI provider calls and multi-agent step failures
+- **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed server communication
+- **Cross-platform installers** — automated setup scripts for Linux/macOS (`install.sh`) and Windows (`install.bat`)
 
 ---
 
@@ -82,27 +86,40 @@ A standalone **Snake game** (HTML canvas) is also included at `game/index.html`.
 
 | Requirement | Version | Purpose |
 |-------------|---------|---------|
-| [Bun](https://bun.sh) | v1.3.14+ | Runtime and package manager |
+| [Bun](https://bun.sh) | >= 1.0.0 | Runtime and package manager |
 | [OpenRouter](https://openrouter.ai) API key | — | LLM provider access (required) |
 | [Firecrawl](https://www.firecrawl.dev/) API key | — | Web search and crawling (optional) |
 
-### Installation
+### Installation Options
+
+#### Option 1: Cross-Platform Installer (Recommended)
+
+- **Linux/macOS:** `bash install/install.sh`
+- **Windows:** Run `install/install.bat`
+
+The installers automatically detect and install Node.js, Bun, and the `astrabot` npm package, then configure your PATH.
+
+#### Option 2: npm (Global)
+
+```bash
+npm install -g astrabot
+```
+
+#### Option 3: npx (No Installation)
+
+```bash
+npx astrabot setup
+npx astrabot wakeup
+```
+
+#### Option 4: From Source
 
 ```bash
 git clone <repository-url>
-cd astra-cli    # or arc-cli per lockfile
+cd Astra
 bun install
+bun run index.ts setup
 ```
-
-### NPM Scripts (from `package.json`)
-
-| Script | Command | Purpose |
-|--------|---------|---------|
-| `dev` | `bun run index.ts` | Run without a specific command (no-op, exits) |
-| `setup` | `bun run index.ts setup` | Interactive configuration wizard |
-| `wakeup` | `bun run index.ts wakeup` | Show banner and mode selection |
-
-The package is also configured as a binary (`bin.astra = "./bin/astra"`) so it can be linked globally or installed via npm.
 
 ---
 
@@ -115,7 +132,7 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | Variable | Description |
 |----------|-------------|
 | `OPENROUTER_API_KEY` | OpenRouter API key for LLM access |
-| `OPENROUTER_DEFAULT_MODEL` | Model identifier (e.g., `openrouter/anthropic/claude-sonnet-4.5`, `owl-alpha`, etc.) |
+| `OPENROUTER_DEFAULT_MODEL` | Model identifier (e.g., `anthropic/claude-3.5-sonnet`) |
 
 ### Optional Variables
 
@@ -124,17 +141,39 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | `FIRECRAWL_API_KEY` | Enables `web_search`, `web_crawl`, and `fetch_url` tools via the Firecrawl SDK (otherwise falls back to curl-based DuckDuckGo search) |
 | `SKILLS_DIRS` | Semicolon-separated paths to additional custom skill directories (e.g., `/path/to/skills;/another/dir`) |
 
-### Config File Location
+### Sandbox Variables
 
-- **Config directory:** `~/.astra/`
-- **Config file:** `~/.astra/.env`
-- **Session store:** `~/.astra/sessions/index.json`
+| Variable | Description |
+|----------|-------------|
+| `ASTRA_SANDBOX_ENABLED` | Set to `true` when sandbox mode is active (managed by `astra sandbox`, not manually) |
+
+> **Note:** In sandbox mode, the API key is stored in the OS keychain (or encrypted file), **not** in `~/.astra/.env`. Only the boolean flag `ASTRA_SANDBOX_ENABLED=true` is stored in the config file.
+
+### Retry Configuration Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ASTRA_AGENT_RETRY_ENABLED` | `true` | Enable automatic retry for agent AI calls |
+| `ASTRA_AGENT_RETRY_MAX` | `3` | Maximum retry attempts for agent calls |
+| `ASTRA_AGENT_RETRY_PROGRESS` | `true` | Show retry progress in the terminal |
+| `ASTRA_MULTI_RETRY_ENABLED` | `true` | Enable retry for multi-agent steps |
+| `ASTRA_MULTI_RETRY_MAX` | `2` | Maximum retry attempts for multi-agent steps |
+| `ASTRA_MULTI_RETRY_BACKOFF` | `2` | Backoff multiplier for multi-agent retries |
+
+### Config File Locations
+
+| Path | Purpose |
+|------|---------|
+| `~/.astra/.env` | Environment variables (API keys, model, optional settings) |
+| `~/.astra/sessions/index.json` | Session store (persisted conversation history) |
+| `~/.astra/sessions/<session-id>.json` | Individual session action logs |
+| `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
 
 ### Setup Wizard (`astra setup`)
 
-Running `bun run index.ts setup` launches an interactive configuration wizard that:
+Running `astra setup` launches an interactive configuration wizard that:
 1. Prompts for OpenRouter API key
-2. Prompts for default model (defaults to `anthropic/claude-sonnet-4.5`)
+2. Fetches available models from OpenRouter and lets you search and select one with pricing
 3. Optionally prompts for Firecrawl API key
 4. Optionally prompts for custom skills directories
 5. Saves all values to `~/.astra/.env`, merging with existing values
@@ -170,8 +209,8 @@ This is the fastest way to get work done: `astra "your task here"` classifies in
 
 ### `astra wakeup`
 
-```
-bun run index.ts wakeup
+```bash
+astra wakeup
 ```
 
 Displays the ASCII art banner and presents a top-level mode selection menu:
@@ -183,24 +222,39 @@ Before the mode menu, it checks for a resumable (interrupted) session and offers
 
 ### `astra setup`
 
-```
-bun run index.ts setup
+```bash
+astra setup
 ```
 
 Interactive configuration wizard for API keys and settings.
 
+### `astra sandbox`
+
+```bash
+astra sandbox
+```
+
+Activates sandbox mode — a secure execution environment. The command:
+1. Connects to a local sandbox server (default port 3000)
+2. Performs a health check
+3. Bootstraps with the server (exchanges auth token)
+4. Stores the API key in OS keychain (or encrypted fallback file)
+5. Sets `ASTRA_SANDBOX_ENABLED=true` in config
+
+If sandbox mode is already active, offers to reconfigure.
+
 ### `astra play`
 
-```
-bun run index.ts play
+```bash
+astra play
 ```
 
-Launches the arcade easter egg — an interactive game selector (Retro Snake Classic, Neon Brick Breaker, Neon Pong). Spawns a local Bun HTTP server on port `4321` and opens the game in the default browser.
+Launches the arcade easter egg — an interactive game selector (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Cosmic Drifter). Spawns a local Bun HTTP server on port `4321` and opens the game in the default browser.
 
 ### `astra reset`
 
-```
-bun run index.ts reset
+```bash
+astra reset
 ```
 
 Interactive danger-zone command that completely purges all stored configurations, sessions, and credentials from `~/.astra/`. Requires explicit confirmation.
@@ -215,9 +269,9 @@ Interactive danger-zone command that completely purges all stored configurations
 
 1. A spinner renders the ASCII banner using `figlet` with the **"ANSI Shadow"** font (falls back to **"Standard"** if unavailable)
 2. The banner is printed in **gold/enamel** color (`#ffd000`)
-3. Version `v0.1.0` and tagline "AI-native development companion" are shown
+3. Version and tagline "AI-native development companion" are shown
 4. The screen is cleared and re-rendered in a `while(true)` loop
-5. **Session resume check:** Before the mode menu, `getResumableSession(cwd)` checks `~/.astra/sessions/index.json` for the most recent session. If it has `status === "interrupted"`, the user is offered to resume it. On resume, the session ID is stored in `globalThis.__ASTRA_RESUME_SESSION__` and `runCliMode()` is called directly.
+5. **Session resume check:** Before the mode menu, `getResumableSession(cwd)` checks `~/.astra/sessions/index.json` (served from the in-memory cache) for the most recent session. If it has `status === "interrupted"`, the user is offered to resume it. On resume, the session ID is stored in `globalThis.__ASTRA_RESUME_SESSION__` and `runCliMode()` is called directly.
 6. The mode selection prompt uses `@clack/prompts`' `select()` with options: **CLI**, **Telegram**, **Exit**
 7. **Default action without subcommand:** When `astra` is run without a subcommand, Commander's default action handler checks for `[prompt...]` arguments. If a prompt is provided, it runs `runAutoMode(combinedGoal)` directly. If not, it falls back to `runWakeup()`.
 
@@ -268,14 +322,15 @@ Agent mode is the primary autonomous coding mode. Here is the exact flow:
 
 #### Step 5: Agent Construction
 - A `ToolLoopAgent` (Vercel AI SDK) is created with:
-  - Model from `getAgentModel()` (OpenRouter provider)
+  - Model from `getAgentModel()` (OpenRouter provider, or sandbox model if sandbox mode is active)
   - `stopWhen: stepCountIs(50)` (max 50 tool-calling steps)
   - Instructions: workspace root + "All mutations are staged until approval." + optional context summary
   - Tools: all `createAgentTools()` + `createSessionTools()`
 
 #### Step 6: Agent Execution (with retry)
 - Wrapped in `withSpinner()` showing "Agent is working on your task..."
-- The agent's `onStepFinish` callback logs each tool call in **green** with the tool name in bold and a truncated JSON preview (160 chars)
+- The agent uses `agent.stream()` for real-time output with token telemetry
+- The agent's `onStepFinish` callback logs each tool call in **green** with the tool name in bold and a human-readable description
 - On error: `promptToRetryAiCall()` offers to retry. If declined, the session is marked **interrupted** and all staged changes are discarded.
 
 #### Step 7: Final Response
@@ -324,6 +379,7 @@ A read-only Q&A interface. Flow:
 - `ToolLoopAgent` with `stopWhen: stepCountIs(25)`
 - Spinner message: "Thinking..."
 - Tool calls logged in **cyan** with `-` prefix (vs green `*` in Agent mode)
+- Uses `agent.stream()` for real-time output
 
 #### Step 5: Display Answer
 - Response rendered as markdown in terminal
@@ -346,9 +402,9 @@ Breaks a high-level goal into a structured, executable plan.
 
 #### Step 2: Plan Generation
 - `generatePlan(goal)` is called:
-  1. Creates a read-only `ToolExecutor` (all mutation tools stripped **plus** `apply_changes`, `discard_changes`, `show_pending_changes`, `run_tests`, `run_test_file`, `lint_project`, `format_project`, `create_plan`, `get_plan`, and curl-based `web_search`/`fetch_url`)
+  1. Creates a read-only `ToolExecutor` (all mutation tools stripped)
   2. Web tools from `createWebTools()` (Firecrawl) are added if key is available
-  3. A `generateText()` call is made with the `Output.object({ schema: planSchema })` where the schema expects:
+  3. A `generateText()` call is made with `Output.object({ schema: planSchema })` where the schema expects:
      ```typescript
      {
        researchSummary?: string,
@@ -388,48 +444,21 @@ Breaks a high-level goal into a structured, executable plan.
 
 Coordinates multiple AI agents working together.
 
-#### Step 1: Workflow Type Selection
-- **Use predefined template** → choose from 4 templates
+#### Step 1: Workflow Design
+- **AI-powered workflow designer** — the LLM analyzes your goal and either selects a pre-built template or designs a custom agent team
+- **Use predefined template** → choose from 6 templates
 - **Create custom workflow** → interactive builder
 
-#### Step 2A: Predefined Templates
-| Template | Agents | Strategy |
-|----------|--------|----------|
-| `code_review` | Researcher → Implementer → Reviewer | Sequential |
-| `feature_dev` | Coordinator → Backend Dev + Frontend Dev → QA | Hierarchical |
-| `bug_fix` | Debug Agent → Fix Agent → Test Agent | Sequential |
-| `research` | Researcher 1 + Researcher 2 + Researcher 3 | Parallel |
+#### Step 2: Validation
+- `WorkflowBuilder.validate()` runs 10+ validation checks (see §11)
 
-#### Step 2B: Custom Workflow Builder
-- User adds agents one by one (up to 10) choosing role:
-  - **Researcher** — read-only, 16 tools including web, git, codebase analysis
-  - **Implementer** — full write access, 26 tools including create/modify/delete/run
-  - **Reviewer** — can execute (tests/lint) but not write, 15 tools
-  - **Coordinator** — read-only + planning tools, 8 tools
-  - **Custom** — user selects tools from a list of 32 available tools
-- Each agent can optionally have a **custom model** override
-- Strategy selection: Sequential, Parallel, Hierarchical, or Collaborative
-- Optional retry on failure (up to 2 retries)
-
-#### Step 3: Validation
-- `WorkflowBuilder.validate()` checks:
-  - Workflow ID and goal are present
-  - At least one agent exists
-  - No duplicate agent IDs
-  - No empty agent names or IDs
-  - maxSteps > 0, at least 1 tool per agent
-  - Valid strategy type
-  - Hierarchical strategy requires a coordinator
-  - Collaborative strategy with >1 agent needs a timeout
-  - Fallback agent IDs exist in the workflow
-
-#### Step 4: Execution
+#### Step 3: Execution
 - `MultiAgentOrchestrator.execute()` dispatches based on strategy (see §11)
 
-#### Step 5: Results Display
+#### Step 4: Results Display
 - Summary with status, duration, pool stats, execution results
 
-#### Step 6: Approval Flow
+#### Step 5: Approval Flow
 - Per-agent review groups with diff viewing
 - Approved changes applied via each agent's own `ToolExecutor`
 
@@ -487,8 +516,9 @@ The tool system has **two layers**:
 | `execute_shell` | `{ command: string }` | `string` | Queue a shell command for post-approval execution |
 | `list_skills` | `{}` | `string` | List absolute paths to `SKILL.md` files from skill directories |
 | `read_skill` | `{ path: string }` | `string` | Read a specific `SKILL.md` file (path must be within skill roots) |
-| `session_status` | `{}` | `string` | Show recent sessions (last 5) with mode, goal, and status |
-| `session_history` | `{ session_id: string }` | `string` | Retrieve the full context summary of a previous session |
+| `session_status` | `{ limit?: number }` | `string` | Show recent sessions with mode, goal, and status (limit 1–20, default 5) |
+| `session_search` | `{ query: string, limit?: number }` | `string` | Search previous sessions by keyword, file name, or goal |
+| `session_resume_context` | `{ session_id: string, transcript_turns?: number }` | `string` | Get full context of a previous session (transcript_turns 1–30, default 10) |
 
 ### Tool-to-Executor Mapping
 
@@ -626,13 +656,25 @@ function isMutationType(t: ActionType): boolean {
 Sessions are stored in `~/.astra/sessions/index.json` as a JSON file with:
 ```typescript
 interface SessionStoreIndex {
-    version: number          // currently 1
+    version: number          // currently 2
     sessions: SessionEntry[]
     maxSessions: number      // 100
 }
 ```
 
 Writes are **atomic**: data is written to a temp file (`index.json.tmp_PID_TIMESTAMP`) then `renameSync`'d to prevent corruption.
+
+### Cache Layer
+
+**File:** `session/session-cache.ts`
+
+The session store is wrapped by an in-memory cache (`SessionStoreCache`) that:
+- Serves reads from memory (no file I/O) when clean
+- Batches writes with a 500ms debounce interval
+- Maintains an LRU entry cache for O(1) lookups by session ID
+- Tracks dirty entries individually
+- Provides `flushSync()` for critical shutdown paths
+- Exposes a singleton via `getSessionStoreCache()` with `resetSessionStoreCache()` for testing
 
 ### Session Entry Schema
 
@@ -661,7 +703,7 @@ interface SessionEntry {
 
 1. **Begin** (`beginSession`): Creates entry with `status: "active"`. If resuming, loads prior context summary.
 2. **Active**: Agent performs work, actions accumulate in tracker.
-3. **End** (`endSession`): 
+3. **End** (`endSession`):
    - Collects touched files from tracker actions
    - Counts approved/rejected actions
    - **Generates an LLM summary** via `generateText()` (2-3 sentences focusing on goal, files changed, outcome). Falls back to a templated summary if LLM fails.
@@ -761,6 +803,7 @@ new WorkflowBuilder(id, goal)
   .withParallelStrategy(maxConcurrent, timeout)
   .withHierarchicalStrategy()
   .withCollaborativeStrategy(timeout)
+  .withDagStrategy(maxConcurrent, timeout)
   .withRetryOnFailure(maxRetries)
   .withFallbackAgents(ids)
   .withExpectedOutput(desc)
@@ -769,15 +812,131 @@ new WorkflowBuilder(id, goal)
 
 #### Workflow Templates (`WorkflowTemplates`)
 
-Four predefined templates:
-1. `codeReviewWorkflow`: Sequential, retry(1)
-2. `featureDevelopmentWorkflow`: Hierarchical, no retry
-3. `bugFixingWorkflow`: Sequential, retry(2)
-4. `collaborativeResearchWorkflow`: Parallel (3 concurrent, 45s timeout)
+Six predefined templates:
+1. `codeReviewWorkflow`: Sequential, retry(1) — Researcher → Implementer → Reviewer
+2. `featureDevelopmentWorkflow`: DAG — Coordinator → Backend Dev + Frontend Dev → QA
+3. `bugFixingWorkflow`: Sequential, retry(2) — Debug Agent → Fix Agent → Test Agent
+4. `collaborativeResearchWorkflow`: Parallel (3 concurrent, 45s timeout) — Researcher 1 + 2 + 3
+5. `securityAuditWorkflow`: DAG — Scanner → Static Auditor + Dependency Auditor → Report Coordinator
+6. `fullStackFeatureWorkflow`: DAG — Architect → DB Dev + API Dev + UI Dev → Integration Tester
+
+#### Validation Checks
+
+The workflow builder performs 10+ validation checks:
+- Workflow ID and goal are present
+- At least one agent exists
+- No duplicate agent IDs
+- No empty agent names or IDs
+- `maxSteps > 0` for each agent
+- At least 1 tool per agent
+- Valid strategy type
+- Hierarchical strategy requires a coordinator
+- Collaborative strategy with >1 agent needs a timeout
+- Fallback agent IDs exist in the workflow
+- Dependency references exist and are not self-referencing
+- **DAG cycle detection** — detects and reports dependency cycles
+- Warns if DAG strategy is used but no agent has dependencies
 
 ---
 
-## 12. Project Structure — Every File
+## 12. Sandbox Mode & Secure Storage
+
+### Sandbox Configuration (`ai/sandbox-config.ts`)
+
+Sandbox mode provides a secure, self-contained execution environment with the following security model:
+
+- **NO secrets in config files** — API keys never touch `~/.astra/.env`
+- **OS keychain storage** — Credentials live only in the OS keychain or encrypted fallback file
+- **HMAC-signed requests** — All server communication uses SHA-256 HMAC with timestamps (replay protection)
+- **Fixed model** — Sandbox mode uses `openrouter/owl-alpha`
+- **Fixed port** — Default sandbox server port is 3000
+- **Key caching** — In-memory cache with 5-minute TTL
+- **Key validation** — Sanitizes and validates API keys (strips brackets/quotes, validates `sk-or-v1-*` format)
+
+#### Activation Flow (`activateSandbox()`)
+
+1. Health check the sandbox server
+2. Generate a secure random auth token (32 bytes hex)
+3. Bootstrap with the server (POST `/bootstrap` with auth token)
+4. Server returns API key + signing secret
+5. Validate and sanitize the API key
+6. Store auth token, API key, and signing secret in secure storage
+7. Set `ASTRA_SANDBOX_ENABLED=true` in config
+
+#### Key Retrieval Flow (`getSandboxApiKey()`)
+
+1. Check secure storage (persists across restarts)
+2. Check memory cache (5-minute TTL)
+3. Fetch fresh from server with HMAC-signed request (GET `/api/key`)
+4. Validate, store in secure storage + memory cache
+
+### Secure Storage (`ai/secure-storage.ts`)
+
+Provides encrypted on-device storage for sensitive values:
+
+- **Primary:** OS native credential managers via `keytar`
+  - macOS: Keychain
+  - Windows: Credential Vault
+  - Linux: Secret Service (libsecret)
+- **Fallback:** AES-256-GCM encrypted file at `~/.astra/.secure/sandbox.enc`
+  - Encryption key derived from machine-id via `scrypt`
+  - Device-bound (non-portable across machines)
+  - File permissions restricted to owner-only (0o600)
+  - Atomic writes (temp file + rename)
+
+#### Stored Credentials
+
+| Key | Purpose |
+|-----|---------|
+| `sandbox-api-key` | OpenRouter API key for sandbox mode |
+| `sandbox-auth-token` | Auth token for sandbox server communication |
+| `sandbox-signing-secret` | HMAC signing secret for request authentication |
+
+---
+
+## 13. Skills System
+
+### Overview
+
+Skills are `SKILL.md` files that provide structured guidance to the AI agent for specific tasks. They are discoverable via the `list_skills` and `read_skill` tools.
+
+### Skill Directories
+
+Skills are loaded from three sources (in order):
+
+1. **Built-in:** `.skills/` directory in the project
+2. **Cursor:** `~/.cursor/skills-cursor/` (if exists)
+3. **Claude:** `~/.claude/skills/` (if exists)
+4. **Custom:** Paths specified in `SKILLS_DIRS` env var (semicolon-separated)
+
+### Built-in Skills
+
+| Skill | File | Purpose |
+|-------|------|---------|
+| `code-review` | `.skills/code-review/SKILL.md` | Structured code review checklist (quality, error handling, security, performance, testing) with standardized output format |
+| `documentation` | `.skills/documentation/SKILL.md` | Documentation standards and templates for README, CHANGELOG, and TSDoc comments |
+| `git-workflow` | `.skills/git-workflow/SKILL.md` | Branch naming conventions, conventional commits, workflow steps, and pre-commit checklist |
+| `project-setup` | `.skills/project-setup/SKILL.md` | Development environment setup guide with prerequisites and common issues |
+| `test-runner` | `.skills/test-runner/SKILL.md` | Test execution patterns, result interpretation, and reporting format |
+
+### Skill File Format
+
+Each `SKILL.md` uses YAML frontmatter for metadata:
+
+```markdown
+---
+name: skill-name
+description: When to use this skill
+---
+
+# Skill Title
+
+Instructions for the agent...
+```
+
+---
+
+## 14. Project Structure — Every File
 
 ```
 astrabot/                           # Project root
@@ -789,108 +948,93 @@ astrabot/                           # Project root
 ├── .npmignore                      # Excludes tests, .github, sandbox_home, private from npm package.
 │
 ├── bin/astra                       # Binary entry point (shebang: #!/usr/bin/env bun)
-│   ├── index.ts                    # Re-exports getAgentModel from ai.config.ts.
-│   ├── ai.config.ts                # Creates OpenRouter provider and returns model instance.
-│   │                                # Validates OPENROUTER_API_KEY and OPENROUTER_DEFAULT_MODEL env vars.
-│   ├── config-loader.ts            # Manages ~/.astra/.env file: loading (via dotenv), reading env vars,
-│   │                                # and saving config (key=value merge with atomic updates).
-│   └── retry-prompt.ts             # promptToRetryAiCall(): shows error in red, asks "Try again?" via @clack/confirm.
+│
+├── install/                        # Cross-platform installer scripts.
+│   ├── README.md                   # Installer documentation
+│   ├── install.sh                  # Linux/macOS Bash installer
+│   └── install.bat                 # Windows Batch installer
+│
+├── ai/                             # AI provider configuration and utilities.
+│   ├── index.ts                    # Public API re-exports.
+│   ├── ai.config.ts                # OpenRouter provider setup and model resolution.
+│   ├── config-loader.ts            # ~/.astra/.env management (load, read, save).
+│   ├── auto-retry.ts               # withAiRetry() and createRetryableAiCall().
+│   ├── retry-prompt.ts             # Manual retry prompt (promptToRetryAiCall).
+│   ├── sandbox-config.ts           # Sandbox mode: activation, key retrieval, HMAC signing.
+│   └── secure-storage.ts           # Encrypted credential storage (OS keychain + AES-256-GCM fallback).
+│
+├── core/retry/                     # Core retry engine.
+│   ├── index.ts                    # Public API re-exports.
+│   ├── retry-config.ts             # ErrorCategory enum, RetryConfig, presets.
+│   ├── retry-engine.ts             # withRetry(), withRetryOrNull(), RetryPresets.
+│   └── error-classifier.ts         # Error classification (status codes, patterns, codes).
 │
 ├── tui/                            # Terminal UI utilities.
-│   ├── terminal-md.ts              # Markdown-to-terminal rendering via marked + marked-terminal.
-│   │                                # Auto-detects terminal width (40-120 chars). Caches configuration.
-│   ├── spinner.ts                  # Animated spinner with metabolic rate engine, live token telemetry (↑input/↓output), streaming chunk tracking, and tok/s velocity summary.
-│   └── wakeup.ts                   # Banner (figlet "ANSI Shadow" font) + top-level mode selection.
-│                                    # Gold #ffd000 color. Checks for resumable interrupted sessions.
-│                                    # Infinite loop: clear → print → select mode → run → repeat.
+│   ├── terminal-md.ts              # Markdown-to-terminal rendering (marked + marked-terminal).
+│   ├── spinner.ts                  # Animated spinner with metabolic rate engine, token telemetry, streaming.
+│   └── wakeup.ts                   # ASCII banner with breathing animation + star field, mode selection.
 │
 ├── modes/                          # All interaction modes.
-│   ├── cli.ts                      # CLI mode loop: Agent / Plan / Ask / Multi-Agent / Back.
-│   ├── setup.ts                    # Interactive setup wizard for ~/.astra/.env.
+│   ├── cli.ts                      # CLI mode loop (mode selection).
+│   ├── auto.ts                     # Auto mode (LLM intent classification router).
+│   ├── setup.ts                    # Interactive setup wizard.
 │   │
-│   ├── agent/                      # Agent mode — autonomous tool-driven coding.
-│   │   ├── types.ts                # ActionType, ActionStatus, ActionLog, AgentConfig definitions.
-│   │   │                            # defaultAgentConfig(): cwd, 1MB max file size, standard excludes.
-│   │   │                            # isMutationType(): returns true for file_create/modify/delete, folder_create, tool_execute.
-│   │   ├── action-tracker.ts       # ActionTracker class: append-only log with log(), getActions(), getPendingMutations().
-│   │   ├── agent-tools.ts          # createAgentTools(): wraps 35 ToolExecutor methods as Vercel AI SDK tools with Zod schemas.
-│   │   │                            # Supports afterCreateFile hook for immediate approval during agent loop.
-│   │   │                            # NOTE: apply_changes is intentionally NOT exposed as a tool.
-│   │   ├── tool-executor.ts        # ToolExecutor class: all tool implementations.
-│   │   │                            # Staging overlay: Map<string,string> for file contents, Set<string> for deletions.
-│   │   │                            # Safety: path traversal prevention, exclude pattern matching, file size limits.
-│   │   │                            # Text detection: 40+ text file extensions + extensionless files.
-│   │   │                            # applyApprovedFromTracker(): replays approved actions to real filesystem.
-│   │   │                            # Skill roots: SKILLS_DIRS env + ~/.cursor/skills-cursor + ~/.claude/skills.
-│   │   ├── diff-view.ts            # formatPatch(): unified diff with 3-line context.
-│   │   │                            # composeBeforeAfter(): collapses multi-action sequences into before→after.
-│   │   ├── approval.ts             # runApprovalFlow(): "Approve all" / "Review one by one" / "Cancel".
-│   │   │                            # groupPending(): groups by path, generates diffs, separates shell commands.
-│   │   └── orchestrator.ts         # runAgentMode(): goal input → agent execution → approval → apply.
-│   │                                # Session begin/end, retry on provider error, context summary injection.
+│   ├── agent/                      # Agent mode.
+│   │   ├── types.ts                # ActionType, ActionStatus, ActionLog, AgentConfig.
+│   │   ├── action-tracker.ts       # ActionTracker (append-only log).
+│   │   ├── agent-tools.ts          # createAgentTools() — 35+ Vercel AI SDK tools.
+│   │   ├── tool-executor.ts        # ToolExecutor — staging overlay + all implementations.
+│   │   ├── diff-view.ts            # Unified diff generation.
+│   │   ├── approval.ts             # runApprovalFlow() — approve/review/reject.
+│   │   └── orchestrator.ts         # runAgentMode() — full agent lifecycle.
 │   │
-│   ├── ask/                        # Ask mode — read-only Q&A.
-│   │   └── orchestrator.ts         # runAskMode(): question → read-only agent → display markdown → optional save.
-│   │                                # createReadOnlyTools(): strips 11 mutation tools from agent tools.
-│   │                                # Save: temporarily enables file creation for response.md, formats as ## Question / ## Answer.
+│   ├── ask/                        # Ask mode.
+│   │   └── orchestrator.ts         # runAskMode() — read-only Q&A.
 │   │
-│   ├── plan/                       # Plan mode — structured multi-step planning with execution.
-│   │   ├── types.ts                # PlanStep { id, title, description, hints?, complexity? } and Plan { goal, researchSummary?, steps }.
-│   │   ├── planner.ts              # generatePlan(): creates read-only executor, runs generateText() with Zod schema,
-│   │   │                            # returns { goal, researchSummary, steps } with complexity ratings.
-│   │   │                            # createPlannerTools(): strips all mutation + staging + planning + curl-web tools.
-│   │   ├── selection.ts            # printPlan(): numbered steps with color-coded complexity tags.
-│   │   │                            # selectSteps(): @clack multiselect, all pre-selected.
-│   │   ├── web-tools.ts            # createWebTools(): Firecrawl-based web_search, web_crawl, fetch_url.
-│   │   │                            # Uses @mendable/firecrawl-js. Lazy-initializes client with API key.
-│   │   │                            # web_search: search with limit (1-10), returns title/url/snippet list.
-│   │   │                            # web_crawl: scrape to markdown. fetch_url: native fetch, 16K char limit.
-│   │   └── orchestrator.ts         # runPlanMode(): goal → generatePlan → printPlan → selectSteps → execute each step
-│   │                                # as independent agent → batch approval → apply.
+│   ├── plan/                       # Plan mode.
+│   │   ├── types.ts                # PlanStep, Plan interfaces.
+│   │   ├── planner.ts              # generatePlan() — LLM-structured planning.
+│   │   ├── selection.ts            # printPlan(), selectSteps().
+│   │   ├── web-tools.ts            # Firecrawl-based web_search, web_crawl, fetch_url.
+│   │   └── orchestrator.ts         # runPlanMode() — plan → select → execute → approve.
 │   │
-│   └── multi/                      # Multi-agent mode — orchestrate multiple agents.
-│       ├── types.ts                # Full type system: AgentRole, AgentConfig, AgentMessage, AgentContext,
-│       │                            # AgentExecutionResult, OrchestrationStrategy, MultiAgentWorkflow,
-│       │                            # AgentPool, AgentInstance, OrchestratorState, CommunicationChannel.
-│       ├── agent-pool-manager.ts   # AgentPoolManager: register, track, activate/deactivate, fail agents.
-│       │                            # Queue messages, update completion percentage, get stats.
-│       ├── message-broker.ts       # MessageBroker: pub-sub communication channel.
-│       │                            # broadcast(), subscribe(), getMessagesFor(), replayMessages().
-│       ├── multi-agent-orchestrator.ts  # MultiAgentOrchestrator: main orchestration engine.
-│       │                            # Strategy dispatch: executeSequential/Parallel/Hierarchical/Collaborative.
-│       │                            # Per-agent model support, role-based system prompts, tool filtering.
-│       │                            # createExecutorForAgent(): configures permissions by role.
-│       │                            # buildAgentPrompt(): goal + role + conversation history + queued messages.
-│       │                            # getSummary(): comprehensive execution report.
-│       ├── workflow-builder.ts     # WorkflowBuilder: fluent API for building workflows.
-│       │                            # addResearcher/Implementer/Reviewer/Coordinator/CustomAgent.
-│       │                            # Strategy setters, retry config, validation with 10+ checks.
-│       │                            # WorkflowTemplates: 4 predefined workflow configurations.
-│       ├── examples.ts             # 5 example workflows: codeReview, parallelDevelopment,
-│       │                            # collaborativeBugFix, advanced, multiModelOrchestration.
-│       └── orchestrator.ts         # runMultiAgentMode(): template or custom → validate → execute → display → approve.
-│                                    # Per-agent approval groups. Applies via each agent's own executor.
+│   └── multi/                      # Multi-agent mode.
+│       ├── types.ts                # Full type system (AgentRole, AgentConfig, etc.).
+│       ├── agent-pool-manager.ts   # AgentPoolManager — registration, tracking, stats.
+│       ├── message-broker.ts       # MessageBroker — pub-sub communication.
+│       ├── multi-agent-orchestrator.ts  # MultiAgentOrchestrator — strategy dispatch.
+│       ├── workflow-builder.ts     # WorkflowBuilder (fluent API) + WorkflowTemplates.
+│       ├── examples.ts             # 8 example workflow demonstrations.
+│       └── orchestrator.ts         # runMultiAgentMode() — AI workflow designer + execution.
 │
 ├── session/                        # Session persistence and management.
-│   ├── index.ts                    # Public API re-exports from all session modules.
-│   ├── store.ts                    # JSON file store at ~/.astra/sessions/index.json.
-│   │                                # Atomic writes (temp file + rename). CRUD operations: create, read, update, delete.
-│   │                                # Max 100 sessions with pruning. Schema version 2 with back-compat migration.
-│   ├── session-manager.ts          # beginSession(), endSession(), endMultiSession(), markSessionInterrupted().
-│   │                                # LLM-powered summarisation (falls back to template).
-│   │                                # formatSessionLine(): status icon + age + mode tag + goal preview.
-│   │                                # getResumableSession(), getSessionHistory(), removeSession().
-│   ├── session-context.ts          # captureSessionContext(), buildContextSummary().
-│   │                                # Extracts active files and builds human-readable summary.
-│   └── session-tools.ts            # createSessionTools(): session_status, session_search, session_resume_context tools.
+│   ├── index.ts                    # Public API re-exports.
+│   ├── store.ts                    # JSON file store (atomic writes, CRUD).
+│   ├── session-manager.ts          # beginSession, endSession, auto-resume logic.
+│   ├── session-context.ts          # Context summary building for resumption.
+│   ├── session-tools.ts            # session_status, session_resume_context, session_search.
+│   └── session-cache.ts            # In-memory cache layer (debounced writes, LRU entries).
 │
-└── game/                           # Arcade easter egg.
-    ├── index.html                  # 🐍 Retro Snake Classic (HTML5 Canvas).
-    │                                # Features: gradient backgrounds, glow effects, snake eyes,
-    │                                # input queue, high score in localStorage, mobile touch controls,
-    │                                # pause/resume, game over screen, High DPI support.
-    ├── neon-breaker.html           # 🧱 Neon Brick Breaker (HTML5 Canvas).
-    └── neon-pong.html              # 🏓 Neon Pong (HTML5 Canvas).
+├── .skills/                        # Built-in skills.
+│   ├── code-review/SKILL.md        # Code review checklist and output format.
+│   ├── documentation/SKILL.md      # Documentation standards and templates.
+│   ├── git-workflow/SKILL.md       # Git conventions and workflow.
+│   ├── project-setup/SKILL.md      # Development environment setup.
+│   └── test-runner/SKILL.md        # Test execution and interpretation.
+│
+├── game/                           # Arcade easter egg.
+│   ├── index.html                  # Retro Snake Classic (HTML5 Canvas).
+│   ├── neon-breaker.html           # Neon Brick Breaker (HTML5 Canvas).
+│   ├── neon-pong.html              # Neon Pong (HTML5 Canvas).
+│   └── cosmic-drifter/             # Cosmic Drifter game asset.
+│
+├── tests/
+│   └── cli.test.ts                 # CLI smoke tests.
+│
+└── private/                        # Internal planning documents (not shipped).
+    ├── available-tools.md          # Complete tool reference.
+    ├── future.md                   # Feature ideas and priority analysis.
+    └── suggestions.md              # Gap analysis and improvement suggestions.
 ```
 
 ### Notable Excluded Files (.gitignore)
@@ -906,7 +1050,7 @@ astrabot/                           # Project root
 
 ---
 
-## 13. Dependencies
+## 15. Dependencies
 
 ### Runtime Dependencies
 
@@ -915,7 +1059,6 @@ astrabot/                           # Project root
 | `@openrouter/ai-sdk-provider` | ^2.9.0 | OpenRouter as LLM provider for Vercel AI SDK |
 | `@clack/prompts` | ^1.4.0 | Interactive terminal prompts (select, confirm, text, multiselect, spinner) |
 | `@clack/core` | ^1.3.1 | Core prompt primitives (peer of @clack/prompts) |
-| `ai` | (transitive) | Vercel AI SDK — ToolLoopAgent, generateText, stepCountIs, Output.object |
 | `@mendable/firecrawl-js` | ^4.25.1 | Firecrawl SDK for web search, crawling, and scraping |
 | `commander` | ^15.0.0 | CLI argument parsing |
 | `chalk` | ^5.6.2 | Terminal string styling (colors) |
@@ -924,10 +1067,9 @@ astrabot/                           # Project root
 | `marked-terminal` | ^7.3.0 | Markdown renderer for terminal output |
 | `diff` | ^9.0.0 | Unified diff generation for file comparison |
 | `dotenv` | ^17.4.2 | .env file loading |
-| `docx` | ^9.7.1 | Microsoft Word document generation (listed as dependency but not used in current source) |
+| `docx` | ^9.7.1 | Microsoft Word document generation |
 | `@types/node` | ^25.9.1 | Node.js type definitions |
 | `@types/marked-terminal` | ^6.1.1 | Type definitions for marked-terminal |
-| `zod` | (transitive) | Schema validation (used by Vercel AI SDK tools) |
 
 ### Dev Dependencies
 
@@ -941,14 +1083,22 @@ astrabot/                           # Project root
 |---------|---------|---------|
 | `typescript` | ^5 | TypeScript compiler |
 
+### Optional Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `keytar` | — | OS keychain access for secure credential storage (falls back to encrypted file) |
+
 ---
 
-## 14. Roadmap
-
-From the README:
+## 16. Roadmap
 
 - [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
 - [x] ~~**Direct prompt argument**~~ — implemented: `astra "goal"` auto-runs via the auto-router, bypassing the interactive menu
+- [x] ~~**Sandbox mode**~~ — implemented in v0.1.3 with secure credential storage and HMAC-signed communication
+- [x] ~~**Session store cache**~~ — implemented in v0.1.3 with debounced writes and LRU entry cache
+- [x] ~~**Cross-platform installers**~~ — implemented in v0.1.3 (`install.sh` and `install.bat`)
+- [x] ~~**Skills system**~~ — 5 built-in skills documented and available
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode
@@ -998,7 +1148,7 @@ User Input (goal)
          ▼
     ┌──────────┐
     │ endSession│──── LLM summary + persist to ~/.astra/sessions/index.json
-    └──────────┘
+    └──────────┘      (via cache layer with debounced write)
 ```
 
 ### Multi-Agent Mode Flow
@@ -1019,7 +1169,8 @@ User selects template or builds custom workflow
 │ Sequential: for each agent → executeAgent()   │
 │ Parallel: batch Promise.all(executeAgent())   │
 │ Hierarchical: coordinator first, then specs   │
-│ Collaborative: round-robrobin + MessageBroker │
+│ Collaborative: round-robin + MessageBroker    │
+│ DAG: dependency-aware scheduling              │
 └────────┬─────────────────────────────────────┘
          │ each agent:
          ▼
@@ -1040,4 +1191,39 @@ User selects template or builds custom workflow
     ┌──────────┐
     │ Applied   │
     └──────────┘
+```
+
+### Sandbox Mode Flow
+
+```
+User runs: astra sandbox
+    │
+    ▼
+┌──────────────────────┐
+│ 1. Health check      │──── GET /health → 200 OK?
+│ 2. Generate token    │──── randomBytes(32).toString("hex")
+│ 3. Bootstrap         │──── POST /bootstrap { authToken }
+│ 4. Validate key      │──── sanitizeApiKey(data.key)
+│ 5. Store credentials │──── OS keychain (or encrypted file)
+│    - API key         │     ├─ sandbox-api-key
+│    - Auth token      │     ├─ sandbox-auth-token
+│    - Signing secret  │     └─ sandbox-signing-secret
+│ 6. Enable flag       │──── ASTRA_SANDBOX_ENABLED=true
+└──────────────────────┘
+    │
+    ▼
+Subsequent AI calls:
+    │
+    ▼
+┌──────────────────────┐
+│ getSandboxApiKey()   │
+│ 1. Check keychain    │
+│ 2. Check mem cache   │──── 5-min TTL
+│ 3. Fetch from server │──── GET /api/key (HMAC-signed)
+│    + validate        │
+│    + cache + store   │
+└──────────────────────┘
+    │
+    ▼
+Use key for OpenRouter API calls with owl-alpha model
 ```

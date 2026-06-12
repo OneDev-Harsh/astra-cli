@@ -19,17 +19,22 @@
 - [Features](#features)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-  - [Option 1: Install Globally via npm](#option-1-install-globally-via-npm)
-  - [Option 2: Run Directly with npx (No Installation)](#option-2-run-directly-with-npx-no-installation)
-  - [Option 3: Install from Source](#option-3-install-from-source)
+  - [Option 1: Cross-Platform Installer (Recommended)](#option-1-cross-platform-installer-recommended)
+  - [Option 2: Install Globally via npm](#option-2-install-globally-via-npm)
+  - [Option 3: Run Directly with npx (No Installation)](#option-3-run-directly-with-npx-no-installation)
+  - [Option 4: Install from Source](#option-4-install-from-source)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
   - [Required Environment Variables](#required-environment-variables)
   - [Optional Environment Variables](#optional-environment-variables)
+  - [Retry Configuration Variables](#retry-configuration-variables)
+  - [Config File Locations](#config-file-locations)
   - [Running the Setup Wizard](#running-the-setup-wizard)
 - [Commands](#commands)
+  - [`astra` (Default — Auto-Router)](#astra-default--auto-router)
   - [`astra wakeup`](#astra-wakeup)
   - [`astra setup`](#astra-setup)
+  - [`astra sandbox`](#astra-sandbox)
   - [`astra play`](#astra-play)
   - [`astra reset`](#astra-reset)
 - [Interaction Modes](#interaction-modes)
@@ -46,6 +51,8 @@
   - [Agent Roles](#agent-roles)
   - [Workflow Templates](#workflow-templates)
   - [Workflow Builder (Fluent API)](#workflow-builder-fluent-api)
+- [Sandbox Mode](#sandbox-mode)
+- [Skills System](#skills-system)
 - [Retry & Error Handling](#retry--error-handling)
 - [Project Structure](#project-structure)
 - [Dependencies](#dependencies)
@@ -87,15 +94,17 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **Per-file diff review** — granular approval flow with unified diffs so you can inspect exactly what changed
 - **Configurable safety** — exclude patterns (`node_modules`, `.git`, `dist`, `build`, `.next`, `*.log`, `.env*`), file size limits (default 1 MB), and per-tool permission toggles per agent role
 - **Path traversal prevention** — strict boundary validation on all filesystem operations
+- **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed server communication
 
 ### 💾 Session Management
 - **Persistent sessions** — sessions are stored to disk with LLM-generated summaries, enabling resumption after interruption
+- **In-memory cache** — session reads served from memory with debounced disk writes for optimal performance
 - **Auto-resume** — interrupted sessions are detected on startup and offered for resumption
 - **Session tools** — agents can query previous sessions via built-in `session_status`, `session_search`, and `session_resume_context` tools
 - **Multi-turn goal tracking** — tracks every user goal across a session for full context awareness
 
 ### 👥 Multi-Agent Orchestration
-- **Four orchestration strategies** — Sequential, Parallel, Hierarchical, and Collaborative
+- **Five orchestration strategies** — Sequential, Parallel, Hierarchical, Collaborative, and DAG
 - **DAG (Directed Acyclic Graph)** — agents run when dependencies are satisfied, with cycle detection and deadlock handling
 - **Five agent roles** — Researcher, Implementer, Reviewer, Coordinator, and Custom
 - **Six pre-built workflow templates** — Code Review, Feature Development, Bug Fixing, Collaborative Research, Security Audit, and Full-Stack Feature
@@ -116,7 +125,11 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **Colored logging** — green for agent actions, cyan for ask mode, yellow for warnings, red for errors
 
 ### 🎮 Easter Egg
-- **Arcade mini-games** — Retro Snake Classic (HTML5 Canvas), Neon Brick Breaker, and Neon Pong, served via Bun's native HTTP server
+- **Arcade mini-games** — Retro Snake Classic, Neon Brick Breaker, Neon Pong, and Cosmic Drifter, served via Bun's native HTTP server
+
+### 📦 Easy Installation
+- **Cross-platform installers** — automated setup scripts for Linux/macOS (`install.sh`) and Windows (`install.bat`)
+- **Skills system** — 5 built-in skills (code-review, documentation, git-workflow, project-setup, test-runner) discoverable by agents
 
 ---
 
@@ -135,9 +148,25 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 
 ## Installation
 
-### Option 1: Install Globally via npm
+### Option 1: Cross-Platform Installer (Recommended)
 
-This is the recommended approach for regular use. Installing globally makes the `astra` command available system-wide.
+The easiest way to get started. The installer automatically detects and installs Node.js, Bun, and the `astrabot` package.
+
+**Linux / macOS:**
+```bash
+bash install/install.sh
+```
+
+**Windows:**
+```cmd
+install\install.bat
+```
+
+Both scripts handle PATH configuration, permission issues, and guide you to run `astra setup` after installation.
+
+### Option 2: Install Globally via npm
+
+This is the recommended approach for regular use if you already have Bun installed. Installing globally makes the `astra` command available system-wide.
 
 ```bash
 npm install -g astrabot
@@ -170,7 +199,7 @@ To uninstall:
 npm uninstall -g astrabot
 ```
 
-### Option 2: Run Directly with npx (No Installation)
+### Option 3: Run Directly with npx (No Installation)
 
 If you don't want to install anything permanently, you can run Astra directly using `npx`. This downloads and executes the package on-the-fly each time.
 
@@ -190,13 +219,16 @@ npx astrabot "explain how this works"
 # Launch the arcade easter egg
 npx astrabot play
 
+# Activate sandbox mode
+npx astrabot sandbox
+
 # Reset all configuration and sessions
 npx astrabot reset
 ```
 
 > **Tip:** The first run with `npx` may take a few seconds as it downloads the package. Subsequent runs are faster due to npx's cache.
 
-### Option 3: Install from Source
+### Option 4: Install from Source
 
 For development or if you want to modify the code:
 
@@ -221,7 +253,7 @@ bun run index.ts wakeup
 ## Quick Start
 
 ```bash
-# 1. Install Astra
+# 1. Install Astra (using any method above)
 npm install -g astrabot
 
 # 2. Configure your API keys (interactive wizard)
@@ -281,6 +313,7 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | `~/.astra/.env` | Environment variables (API keys, model, optional settings) |
 | `~/.astra/sessions/index.json` | Session store (persisted conversation history) |
 | `~/.astra/sessions/<session-id>.json` | Individual session action logs |
+| `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
 
 ### Running the Setup Wizard
 
@@ -346,6 +379,14 @@ astra setup
 
 Interactive configuration wizard for API keys and settings. See [Configuration](#configuration) above.
 
+### `astra sandbox`
+
+```bash
+astra sandbox
+```
+
+Activates sandbox mode — a secure execution environment. Connects to a local sandbox server, fetches an API key, and stores it in the OS keychain. Uses HMAC-signed requests for server communication. If already active, offers to reconfigure.
+
 ### `astra play`
 
 ```bash
@@ -357,6 +398,7 @@ Launches the arcade easter egg — an interactive game selector that lets you ch
 - **Retro Snake Classic** — full Snake game with gradient backgrounds, glow effects, snake eyes, input queue, high score in localStorage, mobile touch controls, pause/resume, and High DPI support
 - **Neon Brick Breaker** — Brick Breaker game built with HTML5 Canvas
 - **Neon Pong** — Pong game built with HTML5 Canvas
+- **Cosmic Drifter** — Space-themed arcade game
 
 A local Bun HTTP server is spawned on port `4321` and the game is automatically opened in your default browser.
 
@@ -459,7 +501,7 @@ Coordinates multiple AI agents working together on complex tasks. This is the mo
 
 ## Tool System — Complete Reference
 
-Astra exposes **35+ tools** to the AI agent, organized into four categories:
+Astra exposes **35+ tools** to the AI agent, organized into categories:
 
 ### File System Tools
 
@@ -609,7 +651,7 @@ User starts mode → beginSession()
     │
     ▼
 Session created (status: "active")
-    │  → Stored in ~/.astra/sessions/index.json
+    │  → Stored in ~/.astra/sessions/index.json (via in-memory cache)
     │  → Unique ID generated (e.g., sess_m5k2x3_abc123)
     │
 Agent works → actions accumulate in tracker
@@ -650,6 +692,14 @@ When resuming, the agent receives a rich context block including:
 - Action counts (applied/rejected)
 - Recent conversation transcript (configurable, default 10 turns)
 - The agent's last response
+
+### Cache Layer
+
+Session reads are served from an in-memory cache with debounced disk writes (500ms). This provides:
+- O(1) lookups by session ID via LRU entry cache
+- No file I/O for reads during active sessions
+- Batched writes for transcript appends
+- Synchronous flush option for shutdown paths
 
 ---
 
@@ -738,6 +788,35 @@ The workflow builder performs 10+ validation checks:
 
 ---
 
+## Sandbox Mode
+
+Sandbox mode provides a secure, self-contained execution environment:
+
+- **One-click activation** — `astra sandbox` handles the entire flow
+- **Secure credential storage** — API keys stored in OS keychain (macOS Keychain, Windows Credential Vault, Linux Secret Service) with AES-256-GCM encrypted file fallback
+- **HMAC-signed requests** — All server communication authenticated with SHA-256 HMAC and timestamps
+- **API key validation** — Automatic sanitization and format validation
+- **In-memory caching** — Keys cached with 5-minute TTL
+- **Fixed model** — Uses `openrouter/owl-alpha` in sandbox mode
+
+---
+
+## Skills System
+
+Astra includes 5 built-in skills that agents can discover and use:
+
+| Skill | Description |
+|-------|-------------|
+| **code-review** | Structured code review checklist with quality, security, and testing criteria |
+| **documentation** | Standards for README, CHANGELOG, and TSDoc comments |
+| **git-workflow** | Branch naming, conventional commits, and pre-commit checklist |
+| **project-setup** | Development environment setup guide |
+| **test-runner** | Test execution patterns and result interpretation |
+
+Skills are stored as `SKILL.md` files in `.skills/` and are discoverable via the `list_skills` and `read_skill` tools. Custom skills can be added via the `SKILLS_DIRS` environment variable.
+
+---
+
 ## Retry & Error Handling
 
 Astra has a comprehensive retry system for resilient operation:
@@ -788,12 +867,19 @@ astrabot/
 │
 ├── bin/astra                       # Binary entry point (shebang: #!/usr/bin/env bun)
 │
+├── install/                        # Cross-platform installer scripts.
+│   ├── README.md                   # Installer documentation
+│   ├── install.sh                  # Linux/macOS Bash installer
+│   └── install.bat                 # Windows Batch installer
+│
 ├── ai/                             # AI provider configuration and utilities.
 │   ├── index.ts                    # Public API re-exports.
 │   ├── ai.config.ts                # OpenRouter provider setup and model resolution.
 │   ├── config-loader.ts            # ~/.astra/.env management (load, read, save).
 │   ├── auto-retry.ts               # withAiRetry() and createRetryableAiCall().
-│   └── retry-prompt.ts             # Manual retry prompt (promptToRetryAiCall).
+│   ├── retry-prompt.ts             # Manual retry prompt (promptToRetryAiCall).
+│   ├── sandbox-config.ts           # Sandbox mode: activation, key retrieval, HMAC signing.
+│   └── secure-storage.ts           # Encrypted credential storage (OS keychain + AES-256-GCM).
 │
 ├── core/retry/                     # Core retry engine.
 │   ├── index.ts                    # Public API re-exports.
@@ -844,12 +930,21 @@ astrabot/
 │   ├── store.ts                    # JSON file store (atomic writes, CRUD).
 │   ├── session-manager.ts          # beginSession, endSession, auto-resume logic.
 │   ├── session-context.ts          # Context summary building for resumption.
-│   └── session-tools.ts            # session_status, session_resume_context, session_search.
+│   ├── session-tools.ts            # session_status, session_resume_context, session_search.
+│   └── session-cache.ts            # In-memory cache layer (debounced writes, LRU entries).
+│
+├── .skills/                        # Built-in skills.
+│   ├── code-review/SKILL.md        # Code review skill.
+│   ├── documentation/SKILL.md      # Documentation skill.
+│   ├── git-workflow/SKILL.md       # Git workflow skill.
+│   ├── project-setup/SKILL.md      # Project setup skill.
+│   └── test-runner/SKILL.md        # Testing skill.
 │
 ├── game/                           # Arcade easter egg.
 │   ├── index.html                  # Retro Snake Classic (HTML5 Canvas).
 │   ├── neon-breaker.html           # Neon Brick Breaker (HTML5 Canvas).
-│   └── neon-pong.html              # Neon Pong (HTML5 Canvas).
+│   ├── neon-pong.html              # Neon Pong (HTML5 Canvas).
+│   └── cosmic-drifter/             # Cosmic Drifter game.
 │
 └── tests/
     └── cli.test.ts                 # CLI tests.
@@ -890,6 +985,12 @@ astrabot/
 |---------|---------|---------|
 | `typescript` | ^5 | TypeScript compiler |
 
+### Optional Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `keytar` | — | OS keychain access for secure credential storage |
+
 ---
 
 ## Roadmap
@@ -897,6 +998,11 @@ astrabot/
 Planned features not yet implemented:
 
 - [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
+- [x] ~~**Direct prompt argument**~~ — implemented: `astra "goal"` auto-runs via the auto-router
+- [x] ~~**Sandbox mode**~~ — implemented in v0.1.3 with secure credential storage
+- [x] ~~**Session store cache**~~ — implemented in v0.1.3 with debounced writes
+- [x] ~~**Cross-platform installers**~~ — implemented in v0.1.3
+- [x] ~~**Skills system**~~ — 5 built-in skills available
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode
