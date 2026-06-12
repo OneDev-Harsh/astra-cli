@@ -385,7 +385,7 @@ Interactive configuration wizard for API keys and settings. See [Configuration](
 astra sandbox
 ```
 
-Activates sandbox mode — a secure execution environment. Connects to a local sandbox server, fetches an API key, and stores it in the OS keychain. Uses HMAC-signed requests for server communication. If already active, offers to reconfigure.
+Activates sandbox mode — a secure execution environment. Connects to the sandbox server, fetches an API key, and stores it in the OS keychain. Uses HMAC-signed requests for server communication. If already active, offers to reconfigure.
 
 ### `astra play`
 
@@ -798,6 +798,7 @@ Sandbox mode provides a secure, self-contained execution environment:
 - **API key validation** — Automatic sanitization and format validation
 - **In-memory caching** — Keys cached with 5-minute TTL
 - **Fixed model** — Uses `openrouter/owl-alpha` in sandbox mode
+- **Remote server** — Sandbox server is hosted at `https://astra-server-oh6s.onrender.com`
 
 ---
 
@@ -813,7 +814,12 @@ Astra includes 5 built-in skills that agents can discover and use:
 | **project-setup** | Development environment setup guide |
 | **test-runner** | Test execution patterns and result interpretation |
 
-Skills are stored as `SKILL.md` files in `.skills/` and are discoverable via the `list_skills` and `read_skill` tools. Custom skills can be added via the `SKILLS_DIRS` environment variable.
+Skills are stored as `SKILL.md` files and are discoverable via the `list_skills` and `read_skill` tools. Skills are loaded from four sources (in order):
+
+1. **Built-in:** `.skills/` directory in the project
+2. **Cursor:** `~/.cursor/skills-cursor/` (if exists)
+3. **Claude:** `~/.claude/skills/` (if exists)
+4. **Custom:** Paths specified in the `SKILLS_DIRS` environment variable (semicolon-separated)
 
 ---
 
@@ -886,6 +892,8 @@ astrabot/
 │   ├── retry-config.ts             # ErrorCategory enum, RetryConfig, presets.
 │   ├── retry-engine.ts             # withRetry(), withRetryOrNull(), RetryPresets.
 │   └── error-classifier.ts         # Error classification (status codes, patterns, codes).
+│
+├── core/tools/                     # (Reserved for future core tools)
 │
 ├── tui/                            # Terminal UI utilities.
 │   ├── terminal-md.ts              # Markdown-to-terminal rendering (marked + marked-terminal).

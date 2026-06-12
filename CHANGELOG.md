@@ -18,6 +18,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.1.5] — 2026-07-03
+
+### Changed
+
+#### Sandbox server URL updated (6c88634 — 2026-07-03)
+
+- **Remote sandbox server** — The default sandbox server URL was changed from `http://127.0.0.1:3000` (local) to `https://astra-server-oh6s.onrender.com` (remote Render deployment) in both `ai/sandbox-config.ts` and `modes/setup.ts`.
+- **`getSandboxConfig()`** — `serverUrl` now returns the remote URL instead of `http://127.0.0.1:3000`.
+- **`activateSandbox()`** — Default parameter changed from local to remote URL.
+- **`startSandboxServer()`** — Health check URL updated to remote server.
+- **`runSandboxSetup()`** in `modes/setup.ts` — Health check and `activateSandbox()` calls updated to use the remote URL.
+
+---
+
 ## [0.1.4] — 2026-07-02
 
 ### Changed

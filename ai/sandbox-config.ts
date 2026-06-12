@@ -137,7 +137,7 @@ export async function getSandboxConfig(): Promise<SandboxConfig> {
 
   return {
     enabled,
-    serverUrl: `http://127.0.0.1:${SANDBOX_SERVER_DEFAULT_PORT}`,
+    serverUrl: `https://astra-server-oh6s.onrender.com`,
     authToken,
     keyTtlMs: SANDBOX_KEY_TTL_MS,
     defaultModel: SANDBOX_MODEL,
@@ -174,7 +174,7 @@ export async function activateSandbox(serverUrl?: string): Promise<{
   success: boolean;
   message: string;
 }> {
-  const url = serverUrl || `http://127.0.0.1:${SANDBOX_SERVER_DEFAULT_PORT}`;
+  const url = serverUrl || `https://astra-server-oh6s.onrender.com`;
 
   // Step 1: Health check
   try {
@@ -351,7 +351,7 @@ export async function startSandboxServer(
 
   const serverScript = path.join(serverDir, "server.js");
   const port = String(SANDBOX_SERVER_DEFAULT_PORT);
-  const healthUrl = `http://127.0.0.1:${port}/health`;
+  const healthUrl = `https://astra-server-oh6s.onrender.com/health`;
 
   return new Promise((resolve) => {
     const child = spawn("node", [serverScript], {

@@ -235,7 +235,7 @@ astra sandbox
 ```
 
 Activates sandbox mode — a secure execution environment. The command:
-1. Connects to a local sandbox server (default port 3000)
+1. Connects to the sandbox server (default: `https://astra-server-oh6s.onrender.com`)
 2. Performs a health check
 3. Bootstraps with the server (exchanges auth token)
 4. Stores the API key in OS keychain (or encrypted fallback file)
@@ -849,7 +849,7 @@ Sandbox mode provides a secure, self-contained execution environment with the fo
 - **OS keychain storage** — Credentials live only in the OS keychain or encrypted fallback file
 - **HMAC-signed requests** — All server communication uses SHA-256 HMAC with timestamps (replay protection)
 - **Fixed model** — Sandbox mode uses `openrouter/owl-alpha`
-- **Fixed port** — Default sandbox server port is 3000
+- **Remote server** — Default sandbox server is `https://astra-server-oh6s.onrender.com` (deployed on Render)
 - **Key caching** — In-memory cache with 5-minute TTL
 - **Key validation** — Sanitizes and validates API keys (strips brackets/quotes, validates `sk-or-v1-*` format)
 
@@ -968,6 +968,8 @@ astrabot/                           # Project root
 │   ├── retry-config.ts             # ErrorCategory enum, RetryConfig, presets.
 │   ├── retry-engine.ts             # withRetry(), withRetryOrNull(), RetryPresets.
 │   └── error-classifier.ts         # Error classification (status codes, patterns, codes).
+│
+├── core/tools/                     # (Reserved for future core tools)
 │
 ├── tui/                            # Terminal UI utilities.
 │   ├── terminal-md.ts              # Markdown-to-terminal rendering (marked + marked-terminal).

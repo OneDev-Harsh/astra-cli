@@ -92,7 +92,7 @@ async function runSandboxSetup(): Promise<void> {
   // Check if server is running
   let serverReady = false;
   try {
-    const res = await fetch("http://127.0.0.1:3000/health", {
+    const res = await fetch("https://astra-server-oh6s.onrender.com/health", {
       signal: AbortSignal.timeout(2000),
     });
     serverReady = res.ok;
@@ -130,7 +130,7 @@ async function runSandboxSetup(): Promise<void> {
         failMessage: "Activation failed.",
       },
       async () => {
-        return activateSandbox();
+        return activateSandbox("https://astra-server-oh6s.onrender.com");
       }
     );
   } catch (err) {
