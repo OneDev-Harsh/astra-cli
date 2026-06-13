@@ -200,7 +200,7 @@ export function createSession(input: {
       }
     }
     // Mark dirty again since we modified
-    (c as any).markDirty();
+    c.markDirty();
   }
 
   return entry;
@@ -248,6 +248,25 @@ export function appendTranscript(
   messages: TranscriptMessage[]
 ): void {
   cache().appendTranscript(id, messages);
+}
+
+/**
+ * Search sessions by keyword with relevance scoring.
+ * Delegates to the cache layer's search implementation.
+ */
+export function searchSessions(
+  query: string,
+  opts?: {
+    workspacePath?: string;
+    limit?: number;
+    mode?: string;
+    status?: string;
+    tags?: string[];
+    since?: string;
+    until?: string;
+  }
+): { entry: SessionEntry; score: number }[] {
+  return cache().searchEntries(query, opts);
 }
 
 export function deleteSession(id: string): boolean {
@@ -344,21 +363,4 @@ export function _resetSessionStoreCache(): void {
   resetSessionStoreCache();
 }
 
-// ── SessionStats (aggregated analytics) ─────────────────────────────────────
 
-/**
- * Aggregated statistics across a set of sessions.
- * Returned by getSessionStats() for observability and dashboards.
- */
-export interface SessionStats {
-  totalSessions: number;
-  byMode: Record<SessionMode, number>;
-  byStatus: Record<SessionStatus, number>;
-  totalFilesTouched: number;
-  totalActionsApplied: number;
-  totalActionsRejected: number;
-  totalPendingTasks: number;
-  averageSessionAgeMs: number;
-  mostActiveWorkspace?: string;
-  tagCounts: Record<string, number>;
-}

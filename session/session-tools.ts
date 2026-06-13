@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { getSession, listSessions } from "./store";
-import { getSessionHistory, formatSessionLine } from "./session-manager";
+import { getSession, searchSessions } from "./store";
+import { getSessionHistory } from "./session-manager";
 import { buildContextSummary } from "./session-context";
 
 export function createSessionTools(workspacePath: string) {
@@ -72,34 +72,27 @@ export function createSessionTools(workspacePath: string) {
 
     /**
      * Search for sessions related to a topic or file.
-     * Useful for "what did we do with auth.ts last time?"
+     * Uses relevance scoring across goals, summaries, tags, and touched files.
      */
     session_search: tool({
       description:
         "Search previous sessions by keyword, file name, or goal. " +
-        "Useful for finding prior work on a specific topic before starting.",
+        "Uses relevance scoring to find the most related prior work.",
       inputSchema: z.object({
         query: z.string().describe("Keyword, file name, or phrase to search for"),
         limit: z.number().int().min(1).max(20).default(10),
       }),
       execute: async ({ query, limit }) => {
-        const all = listSessions(workspacePath, limit * 4); // over-fetch, then filter
-        const q = query.toLowerCase();
-        const matches = all.filter(
-          (s) =>
-            s.lastGoal.toLowerCase().includes(q) ||
-            (s.summary ?? "").toLowerCase().includes(q) ||
-            s.touchedFiles.some((f) => f.toLowerCase().includes(q)) ||
-            (s.allGoals ?? []).some((g) => g.toLowerCase().includes(q))
-        );
+        const results = searchSessions(query, { workspacePath, limit });
 
-        if (matches.length === 0) return `No sessions found matching "${query}".`;
+        if (results.length === 0) return `No sessions found matching "${query}".`;
 
-        const lines = matches.slice(0, limit).map(
-          (s) =>
-            `• [${s.id}] ${s.lastGoal.slice(0, 60)} (${s.status})` +
-            (s.touchedFiles.some((f) => f.toLowerCase().includes(q))
-              ? `\n  Files: ${s.touchedFiles.filter((f) => f.toLowerCase().includes(q)).join(", ")}`
+        const lines = results.map(
+          (r) =>
+            `• [${r.entry.id}] ${r.entry.lastGoal.slice(0, 60)} (${r.entry.status})` +
+            (r.entry.touchedFiles.length > 0
+              ? `\n  Files: ${r.entry.touchedFiles.slice(0, 5).join(", ")}` +
+                (r.entry.touchedFiles.length > 5 ? ` (+${r.entry.touchedFiles.length - 5} more)` : "")
               : "")
         );
         return `Sessions matching "${query}":\n\n${lines.join("\n\n")}`;

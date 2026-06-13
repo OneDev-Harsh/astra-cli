@@ -9,6 +9,9 @@ export {
   clearAllSessions,
   appendTranscript,
   readSessionActions,
+  getSessionStats,
+  flushSessionStore,
+  searchSessions,
 } from "./store";
 export type {
   SessionMode,
@@ -16,7 +19,11 @@ export type {
   SessionEntry,
   TranscriptMessage,
   SessionStoreIndex,
+  SessionStats,
 } from "./store";
+
+// ── Cache stats ─────────────────────────────────────────────────────────────
+export type { CacheStats } from "./session-cache";
 
 // ── Context building ───────────────────────────────────────────────────────
 export {
