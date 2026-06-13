@@ -53,12 +53,44 @@ export interface SessionEntry {
   updatedAt: string;
   /** Previous session ID for chaining */
   previousSessionId?: string;
+
+  // ── New backward-compatible fields ────────────────────────────────────
+
+  /** User-defined tags e.g. ["auth", "refactor"] */
+  tags?: string[];
+  /** Arbitrary key-value metadata e.g. {"branch": "feature/auth"} */
+  labels?: Record<string, string>;
+  /** Root session ID of this branch */
+  branchRootId?: string;
+  /** Parent session ID this was branched from */
+  branchedFrom?: string;
+  /** IDs of child sessions branched from this one */
+  childSessionIds?: string[];
+  /** Times this session has been compacted */
+  compactionCount?: number;
+  /** Approximate total tokens consumed */
+  totalTokens?: number;
 }
 
 export interface SessionStoreIndex {
   version: number;
   sessions: SessionEntry[];
   maxSessions: number;
+}
+
+// ── SessionStats (aggregated analytics) ─────────────────────────────────────
+
+export interface SessionStats {
+  totalSessions: number;
+  byMode: Record<SessionMode, number>;
+  byStatus: Record<SessionStatus, number>;
+  totalFilesTouched: number;
+  totalActionsApplied: number;
+  totalActionsRejected: number;
+  totalPendingTasks: number;
+  averageSessionAgeMs: number;
+  mostActiveWorkspace?: string;
+  tagCounts: Record<string, number>;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -145,6 +177,11 @@ export function createSession(input: {
     createdAt: now(),
     updatedAt: now(),
     previousSessionId: input.previousSessionId,
+    tags: [],
+    labels: {},
+    childSessionIds: [],
+    compactionCount: 0,
+    totalTokens: 0,
   };
 
   // Use cache for the write path
@@ -253,6 +290,45 @@ export function readSessionActions(id: string): ActionLog[] {
 }
 
 /**
+ * Compute aggregated statistics across all sessions.
+ */
+export function getSessionStats(workspacePath?: string): SessionStats {
+  const sessions = listSessions(workspacePath, 10_000);
+  const byMode: Record<SessionMode, number> = { agent: 0, ask: 0, plan: 0, multi: 0, auto: 0 };
+  const byStatus: Record<SessionStatus, number> = { active: 0, completed: 0, interrupted: 0 };
+  const tagCounts: Record<string, number> = {};
+  const workspaceCounts: Record<string, number> = {};
+  let totalFiles = 0, totalApplied = 0, totalRejected = 0, totalPending = 0, totalAge = 0;
+  const now = Date.now();
+
+  for (const s of sessions) {
+    byMode[s.mode] = (byMode[s.mode] ?? 0) + 1;
+    byStatus[s.status] = (byStatus[s.status] ?? 0) + 1;
+    totalFiles += s.touchedFiles.length;
+    totalApplied += s.appliedActions;
+    totalRejected += s.rejectedActions;
+    totalPending += s.pendingTasks?.length ?? 0;
+    totalAge += now - new Date(s.updatedAt).getTime();
+    workspaceCounts[s.workspacePath] = (workspaceCounts[s.workspacePath] ?? 0) + 1;
+    for (const tag of s.tags ?? []) tagCounts[tag] = (tagCounts[tag] ?? 0) + 1;
+  }
+
+  let mostActive: string | undefined;
+  let mostActiveCount = 0;
+  for (const [ws, count] of Object.entries(workspaceCounts)) {
+    if (count > mostActiveCount) { mostActiveCount = count; mostActive = ws; }
+  }
+
+  return {
+    totalSessions: sessions.length, byMode, byStatus,
+    totalFilesTouched: totalFiles, totalActionsApplied: totalApplied,
+    totalActionsRejected: totalRejected, totalPendingTasks: totalPending,
+    averageSessionAgeMs: sessions.length > 0 ? Math.round(totalAge / sessions.length) : 0,
+    mostActiveWorkspace: mostActive, tagCounts,
+  };
+}
+
+/**
  * Flush all pending session writes to disk immediately.
  * Called during graceful shutdown to ensure no data loss.
  */
@@ -266,4 +342,23 @@ export function flushSessionStore(): void {
  */
 export function _resetSessionStoreCache(): void {
   resetSessionStoreCache();
+}
+
+// ── SessionStats (aggregated analytics) ─────────────────────────────────────
+
+/**
+ * Aggregated statistics across a set of sessions.
+ * Returned by getSessionStats() for observability and dashboards.
+ */
+export interface SessionStats {
+  totalSessions: number;
+  byMode: Record<SessionMode, number>;
+  byStatus: Record<SessionStatus, number>;
+  totalFilesTouched: number;
+  totalActionsApplied: number;
+  totalActionsRejected: number;
+  totalPendingTasks: number;
+  averageSessionAgeMs: number;
+  mostActiveWorkspace?: string;
+  tagCounts: Record<string, number>;
 }

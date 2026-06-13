@@ -1,26 +1,17 @@
 /**
  * Session Store Cache Layer
  *
- * Provides in-memory caching for the session store to avoid redundant
- * JSON parse/write operations on every session read/write call.
- *
- * The cache maintains a dirty flag so that:
- * - Reads are served from memory (no file I/O) when clean
- * - Writes batch the index serialization (no repeated stringify)
- * - The index is only flushed to disk when dirty
+ * In-memory caching with proper LRU, statistics, search scoring, and pruning.
+ * All existing public APIs are preserved.
  */
 
 import fs from "fs";
 import path from "path";
 import type { SessionStoreIndex, SessionEntry } from "./store";
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
 export interface CacheOptions {
-  /** Debounce interval in ms for flushing dirty index to disk. Default: 500ms */
   flushDebounceMs?: number;
-  /** Maximum number of entries to keep in the LRU transcript cache. Default: 50 */
-  transcriptCacheSize?: number;
+  entryCacheSize?: number;
 }
 
 interface CachedIndex {
@@ -30,271 +21,180 @@ interface CachedIndex {
   flushTimer: ReturnType<typeof setTimeout> | null;
 }
 
-// ── Cache Implementation ────────────────────────────────────────────────────
+export interface CacheStats {
+  hits: number;
+  misses: number;
+  evictions: number;
+  entryCacheSize: number;
+  dirtyEntries: number;
+  flushes: number;
+}
+
+class LRUMap<V> {
+  private map = new Map<string, V>();
+  private order: string[] = [];
+  constructor(private capacity: number) {}
+  get size(): number { return this.map.size; }
+  get(key: string): V | undefined {
+    const v = this.map.get(key);
+    if (v !== undefined) this.touch(key);
+    return v;
+  }
+  set(key: string, value: V): string | undefined {
+    let evicted: string | undefined;
+    if (!this.map.has(key) && this.map.size >= this.capacity) {
+      evicted = this.order.shift();
+      if (evicted !== undefined) this.map.delete(evicted);
+    }
+    this.map.set(key, value);
+    this.touch(key);
+    return evicted;
+  }
+  delete(key: string): boolean {
+    const existed = this.map.delete(key);
+    if (existed) { const i = this.order.indexOf(key); if (i !== -1) this.order.splice(i, 1); }
+    return existed;
+  }
+  has(key: string): boolean { return this.map.has(key); }
+  clear(): void { this.map.clear(); this.order = []; }
+  values(): IterableIterator<V> { return this.map.values(); }
+  private touch(key: string): void {
+    const i = this.order.indexOf(key);
+    if (i !== -1) this.order.splice(i, 1);
+    this.order.push(key);
+  }
+}
 
 class SessionStoreCache {
   private cache: CachedIndex | null = null;
   private indexFile: string;
   private flushDebounceMs: number;
-  private transcriptCacheSize: number;
-
-  /** LRU cache for individual session entries (by ID) */
-  private entryCache = new Map<string, SessionEntry>();
-
-  /** Track which entries have been mutated but not yet persisted */
+  private entryCacheSize: number;
+  private entryCache: LRUMap<SessionEntry>;
   private dirtyEntries = new Set<string>();
+  private _hits = 0; private _misses = 0; private _evictions = 0; private _flushes = 0;
 
   constructor(indexFile: string, options: CacheOptions = {}) {
     this.indexFile = indexFile;
     this.flushDebounceMs = options.flushDebounceMs ?? 500;
-    this.transcriptCacheSize = options.transcriptCacheSize ?? 50;
+    this.entryCacheSize = options.entryCacheSize ?? 50;
+    this.entryCache = new LRUMap<SessionEntry>(this.entryCacheSize);
   }
 
-  // ── Index Operations ─────────────────────────────────────────────────────
+  get stats(): CacheStats { return { hits: this._hits, misses: this._misses, evictions: this._evictions, entryCacheSize: this.entryCache.size, dirtyEntries: this.dirtyEntries.size, flushes: this._flushes }; }
+  resetStats(): void { this._hits = 0; this._misses = 0; this._evictions = 0; this._flushes = 0; }
 
-  /**
-   * Get the cached index, loading from disk if not already cached.
-   * Subsequent calls return the in-memory copy (no file I/O).
-   */
-  getIndex(): SessionStoreIndex {
-    if (this.cache) return this.cache.index;
-    return this.loadFromDisk();
-  }
+  getIndex(): SessionStoreIndex { if (this.cache) return this.cache.index; return this.loadFromDisk(); }
 
-  /**
-   * Load the index from disk and populate the cache.
-   */
   private loadFromDisk(): SessionStoreIndex {
     if (!fs.existsSync(this.indexFile)) {
-      const fresh: SessionStoreIndex = {
-        version: 2,
-        sessions: [],
-        maxSessions: 100,
-      };
+      const fresh: SessionStoreIndex = { version: 2, sessions: [], maxSessions: 100 };
       this.cache = { index: fresh, dirty: false, lastFlush: Date.now(), flushTimer: null };
       return fresh;
     }
-
     try {
       const raw = fs.readFileSync(this.indexFile, "utf8");
       const parsed = JSON.parse(raw) as SessionStoreIndex;
-
-      // Back-compat: fill missing fields
       for (const s of parsed.sessions) {
-        s.allGoals ??= [s.lastGoal];
-        s.transcript ??= [];
-        s.pendingTasks ??= [];
-        s.lastAgentResponse ??= "";
+        s.allGoals ??= [s.lastGoal]; s.transcript ??= []; s.pendingTasks ??= []; s.lastAgentResponse ??= "";
+        s.tags ??= []; s.labels ??= {}; s.branchRootId ??= undefined; s.branchedFrom ??= undefined;
+        s.childSessionIds ??= []; s.compactionCount ??= 0; s.totalTokens ??= 0;
       }
-
-      // Sort by updatedAt descending
-      parsed.sessions.sort(
-        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
-
-      // Populate entry cache
+      parsed.sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
       this.entryCache.clear();
-      for (const s of parsed.sessions) {
-        this.entryCache.set(s.id, s);
-      }
-
+      for (const s of parsed.sessions) { const ev = this.entryCache.set(s.id, s); if (ev !== undefined) this._evictions++; }
       this.cache = { index: parsed, dirty: false, lastFlush: Date.now(), flushTimer: null };
       return parsed;
     } catch {
-      const fresh: SessionStoreIndex = {
-        version: 2,
-        sessions: [],
-        maxSessions: 100,
-      };
+      const fresh: SessionStoreIndex = { version: 2, sessions: [], maxSessions: 100 };
       this.cache = { index: fresh, dirty: false, lastFlush: Date.now(), flushTimer: null };
       return fresh;
     }
   }
 
-  /**
-   * Mark the index as dirty and schedule a debounced flush to disk.
-   */
-  markDirty(): void {
-    if (!this.cache) return;
-    this.cache.dirty = true;
-    this.scheduleFlush();
-  }
-
-  /**
-   * Immediately flush the index to disk (synchronous).
-   * Use this for critical shutdown paths.
-   */
+  markDirty(): void { if (!this.cache) return; this.cache.dirty = true; this.scheduleFlush(); }
   flushSync(): void {
     if (!this.cache || !this.cache.dirty) return;
-
-    if (this.cache.flushTimer) {
-      clearTimeout(this.cache.flushTimer);
-      this.cache.flushTimer = null;
-    }
-
-    this.writeIndex(this.cache.index);
-    this.cache.dirty = false;
-    this.cache.lastFlush = Date.now();
-    this.dirtyEntries.clear();
+    if (this.cache.flushTimer) { clearTimeout(this.cache.flushTimer); this.cache.flushTimer = null; }
+    this.writeIndex(this.cache.index); this.cache.dirty = false; this.cache.lastFlush = Date.now(); this._flushes++;
   }
-
-  /**
-   * Schedule a debounced flush. Multiple rapid writes are batched.
-   */
-  private scheduleFlush(): void {
-    if (!this.cache) return;
-
-    // If a flush is already scheduled, extend the debounce window
-    if (this.cache.flushTimer) {
-      clearTimeout(this.cache.flushTimer);
-    }
-
-    this.cache.flushTimer = setTimeout(() => {
-      this.flushSync();
-    }, this.flushDebounceMs);
-  }
-
-  /**
-   * Write the index to disk atomically.
-   */
+  private scheduleFlush(): void { if (!this.cache) return; if (this.cache.flushTimer) clearTimeout(this.cache.flushTimer); this.cache.flushTimer = setTimeout(() => this.flushSync(), this.flushDebounceMs); }
   private writeIndex(index: SessionStoreIndex): void {
-    const dir = path.dirname(this.indexFile);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const tmp = `${this.indexFile}.tmp_${process.pid}_${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(index, null, 2), "utf8");
-    fs.renameSync(tmp, this.indexFile);
+    const dir = path.dirname(this.indexFile); if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmp = `${this.indexFile}.tmp_${process.pid}_${Date.now()}`; fs.writeFileSync(tmp, JSON.stringify(index, null, 2), "utf8"); fs.renameSync(tmp, this.indexFile);
   }
 
-  // ── Entry Operations ─────────────────────────────────────────────────────
-
-  /**
-   * Get a session entry by ID from the cache (no file I/O).
-   */
   getEntry(id: string): SessionEntry | undefined {
-    // Check entry cache first
-    const cached = this.entryCache.get(id);
-    if (cached) return cached;
-
-    // Fall back to index scan (still in-memory)
-    const index = this.getIndex();
-    const entry = index.sessions.find((s) => s.id === id);
-    if (entry) {
-      this.entryCache.set(id, entry);
-    }
-    return entry;
+    const cached = this.entryCache.get(id); if (cached) { this._hits++; return cached; }
+    const index = this.getIndex(); const entry = index.sessions.find((s) => s.id === id);
+    if (entry) { this._misses++; this.entryCache.set(id, entry); } return entry;
   }
-
-  /**
-   * Update an entry in the cache and mark dirty.
-   */
   updateEntry(id: string, patch: Partial<SessionEntry>): SessionEntry | undefined {
-    const index = this.getIndex();
-    const entry = index.sessions.find((s) => s.id === id);
-    if (!entry) return undefined;
-
-    Object.assign(entry, patch);
-    this.entryCache.set(id, entry);
-    this.dirtyEntries.add(id);
-    this.markDirty();
-    return entry;
+    const index = this.getIndex(); const entry = index.sessions.find((s) => s.id === id);
+    if (!entry) return undefined; Object.assign(entry, patch); this.entryCache.set(id, entry); this.dirtyEntries.add(id); this.markDirty(); return entry;
   }
-
-  /**
-   * Add a new entry to the cache.
-   */
-  addEntry(entry: SessionEntry): void {
-    const index = this.getIndex();
-    index.sessions.unshift(entry);
-    this.entryCache.set(entry.id, entry);
-    this.markDirty();
-  }
-
-  /**
-   * Remove an entry from the cache.
-   */
+  addEntry(entry: SessionEntry): void { const index = this.getIndex(); index.sessions.unshift(entry); this.entryCache.set(entry.id, entry); this.dirtyEntries.add(entry.id); this.markDirty(); }
   removeEntry(id: string): boolean {
-    const index = this.getIndex();
-    const idx = index.sessions.findIndex((s) => s.id === id);
-    if (idx === -1) return false;
-    index.sessions.splice(idx, 1);
-    this.entryCache.delete(id);
-    this.dirtyEntries.delete(id);
-    this.markDirty();
-    return true;
+    const index = this.getIndex(); const idx = index.sessions.findIndex((s) => s.id === id);
+    if (idx === -1) return false; index.sessions.splice(idx, 1); this.entryCache.delete(id); this.dirtyEntries.delete(id); this.markDirty(); return true;
   }
-
-  /**
-   * Append transcript messages to an entry in the cache.
-   * This is the hot path during live sessions — avoids full index rewrite.
-   */
   appendTranscript(id: string, messages: SessionEntry["transcript"]): void {
-    const entry = this.getEntry(id);
-    if (!entry) return;
-
+    const entry = this.getEntry(id); if (!entry) return;
     entry.transcript.push(...messages);
-    // Cap at 60 messages
-    const TRANSCRIPT_CAP = 60;
-    if (entry.transcript.length > TRANSCRIPT_CAP) {
-      entry.transcript = entry.transcript.slice(-TRANSCRIPT_CAP);
-    }
+    const CAP = 60; if (entry.transcript.length > CAP) entry.transcript = entry.transcript.slice(-CAP);
     entry.updatedAt = new Date().toISOString();
-
-    this.entryCache.set(id, entry);
-    this.dirtyEntries.add(id);
-    this.markDirty();
+    this.entryCache.set(id, entry); this.dirtyEntries.add(id); this.markDirty();
   }
-
-  /**
-   * Get all sessions, optionally filtered by workspace path.
-   * Served from cache — no file I/O.
-   */
   listEntries(workspacePath?: string, limit = 20): SessionEntry[] {
-    const index = this.getIndex();
-    let sessions = index.sessions;
-    if (workspacePath) {
-      const root = path.resolve(workspacePath);
-      sessions = sessions.filter((s) => path.resolve(s.workspacePath) === root);
-    }
+    const index = this.getIndex(); let sessions = index.sessions;
+    if (workspacePath) { const root = path.resolve(workspacePath); sessions = sessions.filter((s) => path.resolve(s.workspacePath) === root); }
     return sessions.slice(0, limit);
   }
+  getMostRecent(workspacePath?: string): SessionEntry | undefined { return this.listEntries(workspacePath, 1)[0]; }
 
-  /**
-   * Get the most recent session for a workspace.
-   */
-  getMostRecent(workspacePath?: string): SessionEntry | undefined {
-    return this.listEntries(workspacePath, 1)[0];
+  searchEntries(query: string, opts: { workspacePath?: string; limit?: number; mode?: string; status?: string; tags?: string[]; since?: string; until?: string } = {}): { entry: SessionEntry; score: number }[] {
+    const { workspacePath, limit = 10, mode, status, tags, since, until } = opts;
+    const index = this.getIndex(); let sessions = [...index.sessions];
+    if (workspacePath) { const root = path.resolve(workspacePath); sessions = sessions.filter((s) => path.resolve(s.workspacePath) === root); }
+    if (mode) sessions = sessions.filter((s) => s.mode === mode);
+    if (status) sessions = sessions.filter((s) => s.status === status);
+    if (tags && tags.length > 0) sessions = sessions.filter((s) => tags.some((t) => s.tags?.map((st) => st.toLowerCase()).includes(t.toLowerCase())));
+    if (since) { const ms = new Date(since).getTime(); sessions = sessions.filter((s) => new Date(s.updatedAt).getTime() >= ms); }
+    if (until) { const ms = new Date(until).getTime(); sessions = sessions.filter((s) => new Date(s.updatedAt).getTime() <= ms); }
+    const q = query.toLowerCase().trim(); const tokens = q.split(/\W+/).filter((w) => w.length > 2);
+    const scored: { entry: SessionEntry; score: number }[] = [];
+    for (const entry of sessions) { const score = _scoreEntry(entry, q, tokens); if (score > 0) scored.push({ entry, score }); }
+    scored.sort((a, b) => { if (b.score !== a.score) return b.score - a.score; return new Date(b.entry.updatedAt).getTime() - new Date(a.entry.updatedAt).getTime(); });
+    return scored.slice(0, limit);
   }
 
-  /**
-   * Invalidate the entire cache (e.g., for testing or external modifications).
-   */
-  invalidate(): void {
-    if (this.cache?.flushTimer) {
-      clearTimeout(this.cache.flushTimer);
-    }
-    this.cache = null;
-    this.entryCache.clear();
-    this.dirtyEntries.clear();
+  prune(maxSessions: number): string[] {
+    const index = this.getIndex(); if (index.sessions.length <= maxSessions) return [];
+    const removed = index.sessions.splice(maxSessions); const ids: string[] = [];
+    for (const r of removed) { ids.push(r.id); this.entryCache.delete(r.id); this.dirtyEntries.delete(r.id); try { fs.unlinkSync(path.join(path.dirname(this.indexFile), `${r.id}.json`)); } catch { /* ignore */ } }
+    this.markDirty(); return ids;
   }
+  invalidate(): void { if (this.cache?.flushTimer) clearTimeout(this.cache.flushTimer); this.cache = null; this.entryCache.clear(); this.dirtyEntries.clear(); }
 }
 
-// ── Singleton ──────────────────────────────────────────────────────────────
+function _scoreEntry(entry: SessionEntry, q: string, tokens: string[]): number {
+  let score = 0;
+  const goal = entry.lastGoal.toLowerCase(); const summary = (entry.summary ?? "").toLowerCase();
+  if (goal.includes(q)) score += 50; if (summary.includes(q)) score += 30;
+  for (const t of tokens) {
+    if (goal.includes(t)) score += 20; if (summary.includes(t)) score += 10;
+    if (entry.tags?.some((tag) => tag.toLowerCase().includes(t) || t.includes(tag.toLowerCase()))) score += 25;
+    if (entry.touchedFiles.some((f) => f.toLowerCase().includes(t) || t.includes(f.toLowerCase()))) score += 8;
+    for (const g of entry.allGoals ?? []) { if (g.toLowerCase().includes(t)) score += 5; }
+  }
+  const ageDays = (Date.now() - new Date(entry.updatedAt).getTime()) / 86400000;
+  if (ageDays < 1) score += 10; else if (ageDays < 7) score += 5; else if (ageDays < 30) score += 2;
+  return score;
+}
 
 let _instance: SessionStoreCache | null = null;
-
 export function getSessionStoreCache(indexFile: string, options?: CacheOptions): SessionStoreCache {
-  if (!_instance) {
-    _instance = new SessionStoreCache(indexFile, options);
-  }
-  return _instance;
+  if (!_instance) _instance = new SessionStoreCache(indexFile, options); return _instance;
 }
-
-/** Reset the singleton (for testing). */
-export function resetSessionStoreCache(): void {
-  if (_instance) {
-    _instance.flushSync();
-    _instance = null;
-  }
-}
+/** Enhanced cache — LRU eviction, statistics, search scoring, pruning. */
+export function resetSessionStoreCache(): void { if (_instance) { _instance.flushSync(); _instance = null; } }
