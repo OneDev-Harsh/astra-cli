@@ -20,6 +20,8 @@ import {
   SANDBOX_MODEL,
 } from "./ai";
 import { withSpinner } from "./tui/spinner";
+import { registerProcessErrorHandlers } from "./core/logger";
+registerProcessErrorHandlers();
 
 const program = new Command();
 

@@ -9,10 +9,12 @@
  * Design goals:
  *  • Zero behaviour change — logAndThrow / logAndContinue never swallow
  *    errors; they only *add* a side-effect (the file write).
- *  • Fire-and-forget file I/O — errors in the logger itself are caught
- *    and silently ignored so they can never crash the host.
+ *  • Synchronous file I/O — guarantees the entry is on disk before the
+ *    process can exit (async fire-and-forget was losing entries).
  *  • Singleton — importing from anywhere returns the same instance.
  *  • No new runtime dependencies.
+ *  • Process-level safety net — uncaughtException / unhandledRejection
+ *    are routed to the log file so nothing is silently lost.
  */
 
 import fs from "fs";
@@ -51,8 +53,11 @@ class ErrorLogger {
   private buffer: ErrorLogEntry[] = [];
   private readonly bufferSize = 200;
 
-  /** Whether we've already attempted log-dir creation (avoid per-call check). */
+  /** Whether the log directory has been successfully created. */
   private dirEnsured = false;
+
+  /** Whether we've warned about dir creation failure (avoid spam). */
+  private dirWarned = false;
 
   static getInstance(): ErrorLogger {
     if (!ErrorLogger.instance) ErrorLogger.instance = new ErrorLogger();
@@ -141,7 +146,7 @@ class ErrorLogger {
 
   // ── Internals ──────────────────────────────────────────────────────────
 
-  private write(
+  write(
     level: ErrorLogEntry["level"],
     source: string,
     errorOrMessage: Error | unknown,
@@ -168,22 +173,22 @@ class ErrorLogger {
       try { fn(entry); } catch { /* swallow */ }
     }
 
-    // 3. Fire-and-forget file write
-    this.rotateIfNeeded();
-    const line = JSON.stringify(entry) + "\n";
+    // 3. Synchronous file write — guarantees the entry is on disk
+    //    before the process can exit (async appendFile was losing entries).
     try {
       this.ensureDir();
-      fs.appendFile(LOG_FILE, line, (err) => {
-        if (err) {
-          // Silently drop — logging must never crash the application
-          // Attempt to log this meta-error to the console in debug mode only
-          if (process.env.DEBUG) {
-            console.error(`[Logger] Failed to write log: ${err.message}`);
-          }
-        }
-      });
-    } catch {
-      // Synchronous path rarely hit — swallow for safety
+      this.rotateIfNeeded();
+      const line = JSON.stringify(entry) + "\n";
+      fs.appendFileSync(LOG_FILE, line);
+    } catch (err) {
+      // Logging must never crash the application.
+      // Warn once so the user knows file logging is broken.
+      if (!this.dirWarned) {
+        this.dirWarned = true;
+        console.error(
+          `[Logger] Cannot write to log file ${LOG_FILE}: ${(err as Error).message}`,
+        );
+      }
     }
   }
 
@@ -193,9 +198,13 @@ class ErrorLogger {
       if (!fs.existsSync(LOG_DIR)) {
         fs.mkdirSync(LOG_DIR, { recursive: true });
       }
+      // Verify the directory is actually writable
+      fs.accessSync(LOG_DIR, fs.constants.W_OK);
       this.dirEnsured = true;
-    } catch {
+    } catch (err) {
       this.dirEnsured = false;
+      // Throw so the caller in `write()` can catch and surface the error
+      throw err;
     }
   }
 
@@ -247,3 +256,38 @@ export const logInfo = (
   message: string,
   context?: Record<string, unknown>,
 ): void => errorLogger.info(source, message, context);
+
+// ── Process-level safety net ──────────────────────────────────────────────
+// Register handlers *once* so that even errors landing outside any
+// try/catch block are captured in the log file.
+
+let processHandlersRegistered = false;
+
+export function registerProcessErrorHandlers(): void {
+  if (processHandlersRegistered) return;
+  processHandlersRegistered = true;
+
+  process.on("uncaughtException", (error: Error) => {
+    try {
+      errorLogger.write("error", "process", error, {
+        type: "uncaughtException",
+      });
+    } catch {
+      // Last resort — if even the logger fails, there's nothing we can do.
+    }
+    // Still print to stderr and exit — logging is best-effort here
+    console.error("[Astra] Uncaught exception:", error.message);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason: unknown) => {
+    try {
+      const isError = reason instanceof Error;
+      errorLogger.write("error", "process", isError ? reason : new Error(String(reason)), {
+        type: "unhandledRejection",
+      });
+    } catch {
+      // Last resort
+    }
+  });
+}
