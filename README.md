@@ -2,7 +2,7 @@
 
 # ✨ Astra
 
-**AI-native development companion — Agent, Ask, Plan, and Multi-Agent modes in your terminal.**
+**AI-native development companion — Agent, Ask, Plan, Auto, and Multi-Agent modes in your terminal.**
 
 [![npm version](https://img.shields.io/npm/v/astrabot?style=flat-square&logo=npm)](https://www.npmjs.com/package/astrabot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -73,7 +73,7 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 |------|---------|:---------------:|
 | **Auto** | LLM-powered intent router — automatically picks the best mode for your request | Depends on route |
 | **Agent** | Autonomous multi-step code modifications | ✅ (staged) |
-| **Ask** | Read-only Q&A about your codebase | ✅ (except optional save) |
+| **Ask** | Read-only Q&A about your codebase | ❌ (except optional save) |
 | **Plan** | Structured multi-step planning with selective execution | ✅ (staged) |
 | **Multi-Agent** | Multiple agents working together in configurable topologies | ✅ (staged) |
 
@@ -125,7 +125,7 @@ Astra provides **five distinct interaction modes** within a single CLI interface
 - **Colored logging** — green for agent actions, cyan for ask mode, yellow for warnings, red for errors
 
 ### 🎮 Easter Egg
-- **Arcade mini-games** — Retro Snake Classic, Neon Brick Breaker, Neon Pong, and Cosmic Drifter, served via Bun's native HTTP server
+- **Arcade mini-games** — Retro Snake Classic, Neon Brick Breaker, and Neon Pong, served via Bun's native HTTP server
 
 ### 📦 Easy Installation
 - **Cross-platform installers** — automated setup scripts for Linux/macOS (`install.sh`) and Windows (`install.bat`)
@@ -314,6 +314,7 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | `~/.astra/sessions/index.json` | Session store (persisted conversation history) |
 | `~/.astra/sessions/<session-id>.json` | Individual session action logs |
 | `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
+| `~/.astra/logs/astra.log` | Rotating error log file (5 MiB max, 3 backups) |
 
 ### Running the Setup Wizard
 
@@ -366,7 +367,6 @@ astra wakeup
 Launches the main entry point. Displays the animated ASCII art banner and presents the top-level mode selection:
 
 - **Interactive CLI Mode** → enters the mode loop (Auto / Agent / Ask / Plan / Multi-Agent)
-- **Telegram Gateway Interface** → placeholder (not yet implemented)
 - **Exit Application** → quits
 
 Before the mode menu, it automatically checks for interrupted sessions and offers to resume them.
@@ -398,7 +398,6 @@ Launches the arcade easter egg — an interactive game selector that lets you ch
 - **Retro Snake Classic** — full Snake game with gradient backgrounds, glow effects, snake eyes, input queue, high score in localStorage, mobile touch controls, pause/resume, and High DPI support
 - **Neon Brick Breaker** — Brick Breaker game built with HTML5 Canvas
 - **Neon Pong** — Pong game built with HTML5 Canvas
-- **Cosmic Drifter** — Space-themed arcade game
 
 A local Bun HTTP server is spawned on port `4321` and the game is automatically opened in your default browser.
 
@@ -459,7 +458,7 @@ The primary autonomous coding mode. The agent has full access to all tools and c
 A read-only Q&A interface. The agent can read files, search the codebase, and browse the web, but **cannot modify any files** (except optionally saving the response).
 
 **Flow:**
-1. **Question input** — "What do you like the agent to do for you?"
+1. **Question input** — "What would you like to ask?"
 2. **Read-only agent** — the LLM uses only read-only tools (up to 25 steps)
 3. **Answer display** — response rendered as formatted markdown in the terminal
 4. **Optional save** — you can save the Q&A as a `.md` file with `## Question` / `## Answer` formatting
@@ -486,7 +485,7 @@ Breaks a high-level goal into a structured, executable plan with selective step 
 Coordinates multiple AI agents working together on complex tasks. This is the most powerful mode, supporting sophisticated agent topologies.
 
 **Flow:**
-1. **Goal input** — "What complex operations workflow would you like to run?"
+1. **Goal input** — "What complex workflow would you like to run?"
 2. **AI-powered workflow design** — the LLM analyzes your goal and either selects a pre-built template or designs a custom agent team with a specific orchestration strategy
 3. **Workflow validation** — 10+ validation checks ensure the workflow is well-formed
 4. **Execution** — agents run according to the chosen strategy
@@ -887,13 +886,15 @@ astrabot/
 │   ├── sandbox-config.ts           # Sandbox mode: activation, key retrieval, HMAC signing.
 │   └── secure-storage.ts           # Encrypted credential storage (OS keychain + AES-256-GCM).
 │
-├── core/retry/                     # Core retry engine.
-│   ├── index.ts                    # Public API re-exports.
-│   ├── retry-config.ts             # ErrorCategory enum, RetryConfig, presets.
-│   ├── retry-engine.ts             # withRetry(), withRetryOrNull(), RetryPresets.
-│   └── error-classifier.ts         # Error classification (status codes, patterns, codes).
-│
-├── core/tools/                     # (Reserved for future core tools)
+├── core/                           # Core utilities.
+│   ├── logger.ts                   # Centralised error logger (rotating file + ring buffer).
+│   ├── logger/                     # (Reserved for future logger extensions)
+│   ├── retry/                      # Core retry engine.
+│   │   ├── index.ts                # Public API re-exports.
+│   │   ├── retry-config.ts         # ErrorCategory enum, RetryConfig, presets.
+│   │   ├── retry-engine.ts         # withRetry(), withRetryOrNull(), RetryPresets.
+│   │   └── error-classifier.ts     # Error classification (status codes, patterns, codes).
+│   └── tools/                      # (Reserved for future core tools)
 │
 ├── tui/                            # Terminal UI utilities.
 │   ├── terminal-md.ts              # Markdown-to-terminal rendering (marked + marked-terminal).
@@ -1003,7 +1004,7 @@ astrabot/
 
 ## Roadmap
 
-Planned features not yet implemented:
+Planned features and completed milestones:
 
 - [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
 - [x] ~~**Direct prompt argument**~~ — implemented: `astra "goal"` auto-runs via the auto-router
@@ -1011,6 +1012,8 @@ Planned features not yet implemented:
 - [x] ~~**Session store cache**~~ — implemented in v0.1.3 with debounced writes
 - [x] ~~**Cross-platform installers**~~ — implemented in v0.1.3
 - [x] ~~**Skills system**~~ — 5 built-in skills available
+- [x] ~~**Centralised error logger**~~ — implemented in v0.1.5 with rotating file output
+- [x] ~~**Sandbox remote server**~~ — migrated from local to remote Render deployment in v0.1.5
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode

@@ -1,6 +1,6 @@
 # Astra CLI — Complete Technical Documentation
 
-> **Version:** 0.1.4
+> **Version:** 0.1.5
 > **Runtime:** Bun (>=1.0.0)
 > **License:** MIT
 > **Package name:** `astrabot`
@@ -29,9 +29,10 @@
 11. [Multi-Agent Orchestration](#11-multi-agent-orchestration)
 12. [Sandbox Mode & Secure Storage](#12-sandbox-mode--secure-storage)
 13. [Skills System](#13-skills-system)
-14. [Project Structure — Every File](#14-project-structure--every-file)
-15. [Dependencies](#15-dependencies)
-16. [Roadmap](#16-roadmap)
+14. [Error Logging](#14-error-logging)
+15. [Project Structure — Every File](#15-project-structure--every-file)
+16. [Dependencies](#16-dependencies)
+17. [Roadmap](#17-roadmap)
 
 ---
 
@@ -77,6 +78,7 @@ A standalone **arcade** with multiple mini-games (HTML canvas) is also included.
 - **Retry on failure** — configurable retry logic for flaky AI provider calls and multi-agent step failures
 - **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed server communication
 - **Cross-platform installers** — automated setup scripts for Linux/macOS (`install.sh`) and Windows (`install.bat`)
+- **Centralised error logging** — rotating log file at `~/.astra/logs/astra.log` with ring buffer for post-mortem debugging
 
 ---
 
@@ -168,6 +170,7 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | `~/.astra/sessions/index.json` | Session store (persisted conversation history) |
 | `~/.astra/sessions/<session-id>.json` | Individual session action logs |
 | `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
+| `~/.astra/logs/astra.log` | Rotating error log file (5 MiB max, 3 backups) |
 
 ### Setup Wizard (`astra setup`)
 
@@ -359,7 +362,7 @@ Agent mode is the primary autonomous coding mode. Here is the exact flow:
 A read-only Q&A interface. Flow:
 
 #### Step 1: Question Input
-- "What do you want to ask?"
+- "What would you like to ask?"
 
 #### Step 2: Read-Only Configuration
 - `AgentConfig` is copied from defaults with all mutation permissions **disabled**:
@@ -902,7 +905,7 @@ Skills are `SKILL.md` files that provide structured guidance to the AI agent for
 
 ### Skill Directories
 
-Skills are loaded from three sources (in order):
+Skills are loaded from four sources (in order):
 
 1. **Built-in:** `.skills/` directory in the project
 2. **Cursor:** `~/.cursor/skills-cursor/` (if exists)
@@ -936,7 +939,41 @@ Instructions for the agent...
 
 ---
 
-## 14. Project Structure — Every File
+## 14. Error Logging
+
+**File:** `core/logger.ts`
+
+Astra includes a centralised error logging subsystem that captures errors from every subsystem and writes them to a rotating log file.
+
+### Design Principles
+
+- **Zero behaviour change** — `logAndThrow` / `logAndContinue` never swallow errors; they only *add* a side-effect (the file file write).
+- **Fire-and-forget file I/O** — errors in the logger itself are caught and silently ignored so they can never crash the host.
+- **Singleton** — importing from anywhere returns the same instance.
+- **No new runtime dependencies** — uses only Node.js built-in `fs` module.
+
+### Log Output
+
+- **Location:** `~/.astra/logs/astra.log`
+- **Max size:** 5 MiB per file
+- **Backups:** 3 rotating backups (`.astra.log.1`, `.astra.log.2`, `.astra.log.3`)
+- **Format:** One JSON object per line with `timestamp`, `level`, `source`, `message`, `stack`, and optional `context`.
+
+### Public API
+
+| Function | Description |
+|----------|-------------|
+| `logAndThrow(source, error, context?)` | Log an error and re-throw it so the caller's control-flow is unchanged. |
+| `logAndContinue(source, error, context?)` | Log an error but do **not** throw — the caller decides what to do. |
+| `logWarn(source, message, context?)` | Log a non-fatal warning. |
+| `logInfo(source, message, context?)` | Log an informational message. |
+| `errorLogger.onError(fn)` | Subscribe to every log entry in real time. Returns an unsubscribe function. |
+| `errorLogger.getRecentEntries(count?)` | Return a copy of the in-memory ring buffer (default 50 entries). |
+| `errorLogger.getLogFilePath()` | Return the absolute path of the active log file. |
+
+---
+
+## 15. Project Structure — Every File
 
 ```
 astrabot/                           # Project root
@@ -963,13 +1000,15 @@ astrabot/                           # Project root
 │   ├── sandbox-config.ts           # Sandbox mode: activation, key retrieval, HMAC signing.
 │   └── secure-storage.ts           # Encrypted credential storage (OS keychain + AES-256-GCM fallback).
 │
-├── core/retry/                     # Core retry engine.
-│   ├── index.ts                    # Public API re-exports.
-│   ├── retry-config.ts             # ErrorCategory enum, RetryConfig, presets.
-│   ├── retry-engine.ts             # withRetry(), withRetryOrNull(), RetryPresets.
-│   └── error-classifier.ts         # Error classification (status codes, patterns, codes).
-│
-├── core/tools/                     # (Reserved for future core tools)
+├── core/                           # Core utilities.
+│   ├── logger.ts                   # Centralised error logger (rotating file + ring buffer).
+│   ├── logger/                     # (Reserved for future logger extensions)
+│   ├── retry/                      # Core retry engine.
+│   │   ├── index.ts                # Public API re-exports.
+│   │   ├── retry-config.ts         # ErrorCategory enum, RetryConfig, presets.
+│   │   ├── retry-engine.ts         # withRetry(), withRetryOrNull(), RetryPresets.
+│   │   └── error-classifier.ts     # Error classification (status codes, patterns, codes).
+│   └── tools/                      # (Reserved for future core tools)
 │
 ├── tui/                            # Terminal UI utilities.
 │   ├── terminal-md.ts              # Markdown-to-terminal rendering (marked + marked-terminal).
@@ -1048,11 +1087,11 @@ astrabot/                           # Project root
 - `.eslintcache`, `.cache`, `*.tsbuildinfo`
 - `.idea`, `.DS_Store`
 - `.astra/sessions/`
-- `private/`
+- `private`
 
 ---
 
-## 15. Dependencies
+## 16. Dependencies
 
 ### Runtime Dependencies
 
@@ -1093,7 +1132,7 @@ astrabot/                           # Project root
 
 ---
 
-## 16. Roadmap
+## 17. Roadmap
 
 - [x] ~~**Streaming token output**~~ — implemented in v0.1.2 via `agent.stream()` with real-time chunk display and token telemetry
 - [x] ~~**Direct prompt argument**~~ — implemented: `astra "goal"` auto-runs via the auto-router, bypassing the interactive menu
@@ -1101,6 +1140,8 @@ astrabot/                           # Project root
 - [x] ~~**Session store cache**~~ — implemented in v0.1.3 with debounced writes and LRU entry cache
 - [x] ~~**Cross-platform installers**~~ — implemented in v0.1.3 (`install.sh` and `install.bat`)
 - [x] ~~**Skills system**~~ — 5 built-in skills documented and available
+- [x] ~~**Centralised error logger**~~ — implemented with rotating file output and in-memory ring buffer
+- [x] ~~**Sandbox remote server**~~ — migrated from local to remote Render deployment in v0.1.5
 - [ ] **Telegram mode** — stub present in wakeup menu, not yet implemented
 - [ ] **Undo/redo support** — via action log replay
 - [ ] **Configurable tool allowlists per mode** — currently hardcoded per mode

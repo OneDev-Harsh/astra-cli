@@ -30,6 +30,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **`startSandboxServer()`** — Health check URL updated to remote server.
 - **`runSandboxSetup()`** in `modes/setup.ts` — Health check and `activateSandbox()` calls updated to use the remote URL.
 
+#### Documentation professionally updated
+
+- **README.md** — Comprehensive review and polish: fixed Ask mode mutation indicator consistency, corrected Multi-Agent mode goal prompt text from "complex operations workflow" to "complex workflow", added missing config file locations (`~/.astra/logs/astra.log`), added centralised error logger and remote server migration to roadmap, added `core/logger`, `core/logger/` and `install/` entries to project structure.
+- **CHANGELOG.md** — Reviewed and polished for consistency and accuracy.
+- **DOCUMENTATION.md** — Updated version header from `0.1.4` to `0.1.5`, fixed skills directory count from "three sources" to "four sources", aligned sandbox server URL references, added error logger documentation, updated project structure to match actual filesystem.
+
 ---
 
 ## [0.1.4] — 2026-07-02
@@ -374,7 +380,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 | Metric | Value |
 |--------|-------|
 | Total commits | 34 |
-| Development period | May 29 – July 2, 2026 (35 days) |
+| Development period | May 29 – July 3, 2026 (36 days) |
 | Total files created | 45+ |
 | Total lines of code | ~15,000+ |
 | Interaction modes | 5 (Auto, Agent, Ask, Plan, Multi-Agent) |
@@ -384,4 +390,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 | Retry presets | 4 (aiCall, toolExecution, network, critical) |
 | Error categories | 7 (Transient, Permanent, Rate Limit, Network, Auth, Timeout, Unknown) |
 | Built-in skills | 5 (code-review, documentation, git-workflow, project-setup, test-runner) |
-| Arcade games | 4 (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Cosmic Drifter) |
+| Arcade games | 3 (Retro Snake Classic, Neon Brick Breaker, Neon Pong) |
