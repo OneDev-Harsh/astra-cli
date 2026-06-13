@@ -14,6 +14,7 @@ import {
     mergeRetryConfig,
 } from './retry-config';
 import { classifyError } from './error-classifier';
+import { logAndContinue } from '../logger';
 
 /**
  * Sleep for a specified duration
@@ -101,6 +102,14 @@ export async function withRetry<T>(
             const classifiedError = classifyError(error instanceof Error ? error : new Error(String(error)));
             lastError = classifiedError;
             stats.errors.push(classifiedError);
+
+            // Log every classified error to the central log file
+            logAndContinue("retry-engine", classifiedError.originalError, {
+                category: classifiedError.category,
+                attempt,
+                isRetryable: classifiedError.isRetryable,
+                statusCode: classifiedError.statusCode,
+            });
 
             // Check if we should retry
             const isLastAttempt = attempt > fullConfig.maxRetries;

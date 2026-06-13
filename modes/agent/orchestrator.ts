@@ -19,6 +19,7 @@ import {
 } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
+import { logAndContinue } from "../../core/logger";
 
 /**
  * Safely extract token counts from an AI SDK usage object.
@@ -42,7 +43,7 @@ function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
 
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
-    
+
     switch (toolName) {
         case "read_file":
             return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
@@ -124,7 +125,7 @@ async function streamAgentCall(
     prompt: string,
     ctx: SpinnerContext,
 ): Promise<string> {
-    // Shared state reference object allows callback closure to monitor and shift baseline timers 
+    // Shared state reference object allows callback closure to monitor and shift baseline timers
     const stepTimingState = { lastStepTimestamp: Date.now() };
 
     const streamResult = await agent.stream({
@@ -175,6 +176,10 @@ export async function runAgentMode(preCapturedGoal?: string) {
         const { errors } = executor.applyApprovedFromTracker();
         if (errors.length) {
             executor.discardStagedPath(filePath);
+            logAndContinue("agent", new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`), {
+                filePath,
+                errorCount: errors.length,
+            });
             throw new Error(
                 `Failed to apply approved file ${filePath}: ${errors.join("; ")}`,
             );
@@ -260,6 +265,12 @@ export async function runAgentMode(preCapturedGoal?: string) {
             },
         );
     } catch (error) {
+        logAndContinue("agent", error, {
+            phase: "primary-run",
+            sessionId: sessionEntry.id,
+            goal: goal.trim(),
+        });
+
         const manualRetry = await promptToRetryAiCall(
             "Automatic retries exhausted. Would you like to try once more?",
             error,
@@ -276,6 +287,11 @@ export async function runAgentMode(preCapturedGoal?: string) {
                     (ctx) => streamAgentCall(agent, goal.trim(), ctx),
                 );
             } catch (finalError) {
+                logAndContinue("agent", finalError, {
+                    phase: "manual-retry",
+                    sessionId: sessionEntry.id,
+                    goal: goal.trim(),
+                });
                 markSessionInterrupted(sessionEntry.id);
                 await endSession(
                     sessionEntry.id,
@@ -315,6 +331,12 @@ export async function runAgentMode(preCapturedGoal?: string) {
         async () => {
             const { errors } = executor.applyApprovedFromTracker();
             if (errors.length) {
+                logAndContinue("agent", new Error("Some apply operations failed"), {
+                    phase: "apply-changes",
+                    sessionId: sessionEntry.id,
+                    errorCount: errors.length,
+                    errors,
+                });
                 console.log(chalk.red("\nSome operations reported errors:\n"));
                 for (const e of errors) {
                     console.log(chalk.red(`   - ${e}`));

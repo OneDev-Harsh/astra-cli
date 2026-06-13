@@ -6,17 +6,18 @@
  * a template or dynamically craft a custom agent topology.
  */
 
-import { text, isCancel, select, confirm, multiselect, spinner } from "@clack/prompts";
+import { text, isCancel, select, confirm, spinner } from "@clack/prompts";
 import chalk from "chalk";
 import { generateText, stepCountIs } from "ai";
 import { getAgentModel } from "../../ai";
 import { MultiAgentOrchestrator } from "./multi-agent-orchestrator";
 import { WorkflowBuilder, WorkflowTemplates } from "./workflow-builder";
-import type { MultiAgentWorkflow, OrchestratorEvent } from "./types";
+import type { MultiAgentWorkflow } from "./types";
 import { composeBeforeAfter, formatPatch } from "../agent/diff-view";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { withSpinner } from "../../tui/spinner";
 import type { ActionLog } from "../agent/types";
+import { logAndContinue } from "../../core/logger";
 
 interface ReviewGroup {
   label: string;
@@ -167,6 +168,7 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
       workflow = builder.build();
     }
   } catch (err) {
+    logAndContinue("multi-agent", err, { phase: "workflow-analysis", goal: finalGoal });
     decisionSpinner.stop("⚠️ Model parsing bottleneck; falling back to dynamic Feature Development group");
   }
 
@@ -177,6 +179,10 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
 
   const validation = WorkflowBuilder.validateWorkflow(workflow);
   if (!validation.isValid) {
+    logAndContinue("multi-agent", new Error("Workflow validation failed"), {
+      phase: "validation",
+      errors: validation.errors,
+    });
     console.log(chalk.red("\n❌ Generated Workflow validation failed:\n"));
     for (const error of validation.errors) console.log(chalk.red(`  • ${error}`));
     return;
@@ -220,6 +226,10 @@ export async function runMultiAgentMode(preCapturedGoal?: string): Promise<void>
           ctx.logStep(`  ${chalk.green("✔")} [${chalk.magenta(event.agentId)}] task resolved successfully.`);
         } else if (event.type === "agent:failed") {
           ctx.logStep(`  ${chalk.red("✘")} [${chalk.magenta(event.agentId)}] step faulted.`);
+          logAndContinue("multi-agent", new Error(`Agent ${event.agentId} failed`), {
+            phase: "agent-execution",
+            agentId: event.agentId,
+          });
         }
       });
 
@@ -381,6 +391,11 @@ async function runMultiAgentApprovalFlow(orchestrator: MultiAgentOrchestrator): 
         allErrors.push(...errors.map((e) => `[${agentId}] ${e}`));
       }
       if (allErrors.length > 0) {
+        logAndContinue("multi-agent", new Error("Some apply operations failed"), {
+          phase: "apply-changes",
+          errorCount: allErrors.length,
+          errors: allErrors,
+        });
         console.log(chalk.red("\nErrors:\n"));
         for (const e of allErrors) console.log(chalk.red(`  · ${e}`));
       } else {

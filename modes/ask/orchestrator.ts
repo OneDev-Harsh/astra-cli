@@ -15,6 +15,7 @@ import type { SpinnerContext, LanguageModelUsage } from "../../tui/spinner";
 import { beginSession, endSession, markSessionInterrupted } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
+import { logAndContinue } from "../../core/logger";
 
 function createReadOnlyTools(executor: ToolExecutor) {
     const all = createAgentTools(executor);
@@ -76,7 +77,7 @@ function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
 
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
-    
+
     switch (toolName) {
         case "read_file":
             return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
@@ -145,7 +146,7 @@ export async function runAskMode(preCapturedGoal?: string) {
         },
     });
 
-    const systemDirective = 
+    const systemDirective =
         "You are Astra, an AI-native development CLI companion tool built to help " +
         "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
         "who you are, what your name is, or what model you are running on, you must always identify " +
@@ -223,6 +224,13 @@ export async function runAskMode(preCapturedGoal?: string) {
             break;
         } catch (error) {
             attemptCount++;
+            logAndContinue("ask", error, {
+                attempt: attemptCount,
+                maxRetries: MAX_RETRIES,
+                sessionId: sessionEntry.id,
+                goal: goal.trim(),
+            });
+
             const attemptsRemaining = MAX_RETRIES - attemptCount;
 
             if (attemptsRemaining <= 0) {

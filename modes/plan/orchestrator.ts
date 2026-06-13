@@ -17,6 +17,7 @@ import type { SpinnerContext, LanguageModelUsage } from "../../tui/spinner";
 import { beginSession, endSession, markSessionInterrupted } from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
+import { logAndContinue } from "../../core/logger";
 
 function stepPrompt(goal: string, step: PlanStep): string {
     return [`Goal: ${goal}`, `Step: ${step.title}`, step.description].join("\n");
@@ -44,7 +45,7 @@ function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
 
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
-    
+
     switch (toolName) {
         case "read_file":
             return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
@@ -176,6 +177,10 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
         const { errors } = executor.applyApprovedFromTracker();
         if (errors.length) {
             executor.discardStagedPath(filePath);
+            logAndContinue("plan", new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`), {
+                filePath,
+                errorCount: errors.length,
+            });
             throw new Error(
                 `Failed to apply approved file ${filePath}: ${errors.join("; ")}`,
             );
@@ -196,6 +201,7 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
             plan = await generatePlan(goal);
             break;
         } catch (error) {
+            logAndContinue("plan", error, { phase: "generate-plan", goal: goal.trim() });
             const retry = await promptToRetryAiCall(
                 "Plan generation hit a provider error.",
                 error,
@@ -255,6 +261,11 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
                 }
                 break;
             } catch (error) {
+                logAndContinue("plan", error, {
+                    phase: "execute-step",
+                    stepTitle: step.title,
+                    sessionId: sessionEntry.id,
+                });
                 const retry = await promptToRetryAiCall(
                     `Step "${step.title}" hit a provider error.`,
                     error,
@@ -293,6 +304,12 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
         async () => {
             const { errors } = executor.applyApprovedFromTracker();
             if (errors.length) {
+                logAndContinue("plan", new Error("Some apply operations failed"), {
+                    phase: "apply-changes",
+                    sessionId: sessionEntry.id,
+                    errorCount: errors.length,
+                    errors,
+                });
                 console.log(chalk.red("\nSome operations reported errors:\n"));
                 for (const e of errors) console.log(chalk.red(`  - ${e}`));
             } else {
