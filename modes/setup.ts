@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { intro, outro, text, confirm, isCancel, select } from "@clack/prompts";
+import { intro, outro, text, confirm, isCancel, select, autocomplete } from "@clack/prompts";
 import {
   getEnv,
   saveConfig,
@@ -281,10 +281,11 @@ async function runStandardSetup(): Promise<void> {
     } catch { /* fallback to manual */ }
 
     if (modelOptions.length > 0) {
-      const { select, isCancel: isCancel2 } = await import("@clack/prompts");
-      const selected = await select({
-        message: "Select a model (type to search):",
-        options: [...modelOptions, { value: "custom", label: "Custom Entry...", hint: "manual" }]
+      const { isCancel: isCancel2 } = await import("@clack/prompts");
+      const selected = await autocomplete({
+        message: "Select a model (type to search/filter):",
+        options: [...modelOptions, { value: "custom", label: "Custom Entry...", hint: "manual" }],
+        placeholder: "Type to search models...",
       });
       if (isCancel2(selected)) return outro(chalk.dim("Setup cancelled."));
 
