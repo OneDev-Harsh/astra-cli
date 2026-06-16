@@ -138,7 +138,6 @@ program
         { value: "index.html", label: "Retro Snake Classic" },
         { value: "neon-breaker.html", label: "Neon Brick Breaker" },
         { value: "neon-pong.html", label: "Neon Pong" },
-        { value: "cosmic-drifter", label: "Cosmic Drifter" },
         { value: "exit", label: "Exit" },
       ],
     });
