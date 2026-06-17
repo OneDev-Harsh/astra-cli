@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Memory</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: #050510;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+        }
+
+        .game-wrapper {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 600px;
+            padding: 15px 25px;
+            background: linear-gradient(180deg, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.9));
+            border-radius: 15px 15px 0 0;
+            border: 1px solid rgba(0, 255, 255, 0.2);
+            border-bottom: none;
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            background: linear-gradient(90deg, #00ffff, #ff00ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 3px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 25px;
+        }
+
+        .stat {
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 0.65rem;
+            color: rgba(255, 255, 255, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: bold;
+            font-family: 'Courier New', monospace;
+        }
+
+        .stat-value.moves {
+            color: #00ffff;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        }
+
+        .stat-value.timer {
+            color: #ffcc00;
+            text-shadow: 0 0 10px rgba(255, 204, 0, 0.5);
+        }
+
+        .stat-value.matches {
+            color: #00ff88;
+            text-shadow: 0 0 10px rgba(0, 255, 136, 0.5);
+        }
+
+        .stat-value.streak {
+            color: #ff00ff;
+            text-shadow: 0 0 10px rgba(255, 0, 255, 0.5);
+        }
+
+        #gameCanvas {
+            display: block;
+            border-left: 1px solid rgba(0, 255, 255, 0.2);
+            border-right: 1px solid rgba(0, 255, 255, 0.2);
+            background: #08081a;
+            cursor: pointer;
+        }
+
+        .footer {
+            width: 600px;
+            padding: 12px 20px;
+            background: linear-gradient(0deg, rgba(20, 20, 35, 0.95), rgba(10, 10, 20, 0.9));
+            border-radius: 0 0 15px 15px;
+            border: 1px solid rgba(0, 255, 255, 0.2);
+            border-top: none;
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 10px 25px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00ffff, #0088ff);
+            color: #000;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+        }
+
+        .btn-primary:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.5);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            border: 2px solid rgba(255, 0, 255, 0.5);
+            color: #ff00ff;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 0, 255, 0.1);
+            border-color: #ff00ff;
+        }
+
+        .difficulty-select {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            color: #00ffff;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            cursor: pointer;
+            outline: none;
+            letter-spacing: 1px;
+        }
+
+        .difficulty-select option {
+            background: #1a1a2e;
+            color: #00ffff;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.88);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            backdrop-filter: blur(8px);
+        }
+
+        .overlay.hidden {
+            display: none;
+        }
+
+        .overlay h2 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            letter-spacing: 5px;
+            background: linear-gradient(90deg, #00ffff, #ff00ff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .overlay .subtitle {
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 30px;
+            font-size: 1rem;
+            letter-spacing: 2px;
+        }
+
+        .overlay .result-grid {
+            display: flex;
+            gap: 30px;
+            margin-bottom: 25px;
+        }
+
+        .overlay .result-item {
+            text-align: center;
+        }
+
+        .overlay .result-item .label {
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.4);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+        }
+
+        .overlay .result-item .value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #00ffff;
+            text-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+        }
+
+        .overlay .result-item .value.gold {
+            color: #ffcc00;
+            text-shadow: 0 0 15px rgba(255, 204, 0, 0.5);
+        }
+
+        .instructions {
+            color: rgba(255, 255, 255, 0.35);
+            font-size: 0.8rem;
+            margin-top: 18px;
+        }
+
+        .instructions kbd {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .star-rating {
+            font-size: 2.5rem;
+            margin-bottom: 15px;
+            letter-spacing: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-wrapper">
+        <div class="header">
+            <h1>NEON MEMORY</h1>
+            <div class="stats">
+                <div class="stat">
+                    <div class="label">Moves</div>
+                    <div class="stat-value moves" id="moves">0</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Time</div>
+                    <div class="stat-value timer" id="timer">0:00</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Matches</div>
+                    <div class="stat-value matches" id="matches">0 / 0</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Streak</div>
+                    <div class="stat-value streak" id="streak">x1</div>
+                </div>
+            </div>
+        </div>
+
+        <canvas id="gameCanvas" width="600" height="480"></canvas>
+
+        <div class="footer">
+            <button class="btn btn-primary" id="startBtn">START</button>
+            <select class="difficulty-select" id="difficulty">
+                <option value="easy">EASY (4x3)</option>
+                <option value="normal" selected>NORMAL (4x4)</option>
+                <option value="hard">HARD (5x4)</option>
+                <option value="insane">INSANE (6x4)</option>
+            </select>
+        </div>
+
+        <div class="overlay" id="startScreen">
+            <h2>NEON MEMORY</h2>
+            <p class="subtitle">Match all the neon pairs!</p>
+            <button class="btn btn-primary" id="playBtn">PLAY NOW</button>
+            <p class="instructions">
+                Click cards to flip them | Match pairs to score | Build streaks for bonus points
+            </p>
+        </div>
+
+        <div class="overlay hidden" id="winScreen">
+            <div class="star-rating" id="starRating">★★★</div>
+            <h2>YOU WIN!</h2>
+            <div class="result-grid">
+                <div class="result-item">
+                    <div class="label">Moves</div>
+                    <div class="value" id="finalMoves">0</div>
+                </div>
+                <div class="result-item">
+                    <div class="label">Time</div>
+                    <div class="value" id="finalTime">0:00</div>
+                </div>
+                <div class="result-item">
+                    <div class="label">Score</div>
+                    <div class="value gold" id="finalScore">0</div>
+                </div>
+                <div class="result-item">
+                    <div class="label">Best</div>
+                    <div class="value gold" id="bestScore">0</div>
+                </div>
+            </div>
+            <button class="btn btn-primary" id="retryBtn">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <script>
+        // Audio Context for sound effects
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        let audioCtx = null;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new AudioCtx();
+            }
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            switch(type) {
+                case 'flip':
+                    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(900, audioCtx.currentTime + 0.06);
+                    oscillator.type = 'sine';
+                    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.06);
+                    oscillator.start(audioCtx.currentTime);
+                    oscillator.stop(audioCtx.currentTime + 0.06);
+                    break;
+                case 'match':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(523, audioCtx.currentTime);
+                    oscillator.frequency.setValueAtTime(659, audioCtx.currentTime + 0.08);
+                    oscillator.frequency.setValueAtTime(784, audioCtx.currentTime + 0.16);
+                    gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                    oscillator.start(audioCtx.currentTime);
+                    oscillator.stop(audioCtx.currentTime + 0.3);
+                    break;
+                case 'streak':
+                    oscillator.type = 'sine';
+                    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime);
+                    oscillator.frequency.setValueAtTime(800, audioCtx.currentTime + 0.06);
+                    oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime + 0.12);
+                    oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime + 0.18);
+                    gainNode.gain.setValueAtTime(0.25, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+                    oscillator.start(audioCtx.currentTime);
+                    oscillator.stop(audioCtx.currentTime + 0.35);
+                    break;
+                case 'noMatch':
+                    oscillator.type = 'sawtooth';
+                    oscillator.frequency.setValueAtTime(300, audioCtx.currentTime);
+                    oscillator.frequency.exponentialRampToValueAtTime(150, audioCtx.currentTime + 0.2);
+                    gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                    oscillator.start(audioCtx.currentTime);
+                    oscillator.stop(audioCtx.currentTime + 0.2);
+                    break;
+                case 'win':
+                    const notes = [523, 659, 784, 1047, 1319, 1568];
+                    notes.forEach((freq, i) => {
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(freq, audioCtx.currentTime + i * 0.1);
+                        gain.gain.setValueAtTime(0.2, audioCtx.currentTime + i * 0.1);
+                        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + i * 0.1 + 0.3);
+                        osc.start(audioCtx.currentTime + i * 0.1);
+                        osc.stop(audioCtx.currentTime + i * 0.1 + 0.3);
+                    });
+                    break;
+            }
+        }
+
+        // Game Setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Difficulty settings
+        const DIFFICULTY = {
+            easy:   { cols: 4, rows: 3, pairs: 6 },
+            normal: { cols: 4, rows: 4, pairs: 8 },
+            hard:   { cols: 5, rows: 4, pairs: 10 },
+            insane: { cols: 6, rows: 4, pairs: 12 }
+        };
+
+        // Neon symbols for cards
+        const SYMBOLS = ['◆', '▲', '●', '■', '★', '♦', '♠', '♣', '⬟', '⬢', '◈', '◎'];
+
+        // Neon color pairs for each symbol
+        const SYMBOL_COLORS = [
+            '#00ffff', '#ff00ff', '#00ff88', '#ffcc00',
+            '#ff0066', '#6600ff', '#ff6600', '#00ffcc',
+            '#ff3399', '#33ff99', '#ff9900', '#9933ff'
+        ];
+
+        // Game State
+        let gameState = 'start'; // start, playing, won
+        let cards = [];
+        let flippedCards = [];
+        let matchedPairs = 0;
+        let totalPairs = 0;
+        let moves = 0;
+        let streak = 1;
+        let maxStreak = 1;
+        let score = 0;
+        let highScore = 0;
+        try {
+            highScore = parseInt(localStorage.getItem('neonMemoryHighScore')) || 0;
+        } catch(e) {}
+        let gameTime = 0;
+        let timerInterval = null;
+        let canFlip = true;
+        let matchTimeout = null;
+        let particles = [];
+        let lastTime = 0;
+        let deltaTime = 0;
+        let hoverCard = null;
+        let shakeTimer = 0;
+        let shakeIntensity = 0;
+
+        // Card dimensions
+        const CARD_MARGIN = 10;
+        const CARD_RADIUS = 10;
+
+        function getCurrentDifficulty() {
+            const diff = document.getElementById('difficulty').value;
+            return DIFFICULTY[diff] || DIFFICULTY.normal;
+        }
+
+        function createCards() {
+            const diff = getCurrentDifficulty();
+            totalPairs = diff.pairs;
+
+            // Create symbol-color pairs
+            const pairs = [];
+            for (let i = 0; i < totalPairs; i++) {
+                const symbol = SYMBOLS[i % SYMBOLS.length];
+                const color = SYMBOL_COLORS[i % SYMBOL_COLORS.length];
+                pairs.push({ symbol, color, id: i });
+                pairs.push({ symbol, color, id: i });
+            }
+
+            // Shuffle
+            for (let i = pairs.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pairs[i], pairs[j]] = [pairs[j], pairs[i]];
+            }
+
+            // Calculate card size
+            const totalMarginX = CARD_MARGIN * (diff.cols + 1);
+            const totalMarginY = CARD_MARGIN * (diff.rows + 1);
+            const cardWidth = (canvas.width - totalMarginX) / diff.cols;
+            const cardHeight = (canvas.height - totalMarginY) / diff.rows;
+
+            // Create card objects
+            cards = [];
+            let idx = 0;
+            for (let row = 0; row < diff.rows; row++) {
+                for (let col = 0; col < diff.cols; col++) {
+                    const pair = pairs[idx];
+                    cards.push({
+                        x: CARD_MARGIN + col * (cardWidth + CARD_MARGIN),
+                        y: CARD_MARGIN + row * (cardHeight + CARD_MARGIN),
+                        width: cardWidth,
+                        height: cardHeight,
+                        symbol: pair.symbol,
+                        color: pair.color,
+                        pairId: pair.id,
+                        flipped: false,
+                        matched: false,
+                        flipProgress: 0, // 0 = face down, 1 = face up
+                        matchScale: 1,
+                        hover: false
+                    });
+                    idx++;
+                }
+            }
+        }
+
+        function createParticles(x, y, color, count) {
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    dx: (Math.random() - 0.5) * 10,
+                    dy: (Math.random() - 0.5) * 10,
+                    life: 1,
+                    decay: 0.015 + Math.random() * 0.02,
+                    size: 2 + Math.random() * 5,
+                    color: color
+                });
+            }
+        }
+
+        function flipCard(card) {
+            if (!canFlip || card.flipped || card.matched || flippedCards.length >= 2) return;
+
+            card.flipped = true;
+            flippedCards.push(card);
+            playSound('flip');
+
+            if (flippedCards.length === 2) {
+                moves++;
+                updateUI();
+                canFlip = false;
+
+                const [card1, card2] = flippedCards;
+
+                if (card1.pairId === card2.pairId) {
+                    // Match!
+                    card1.matched = true;
+                    card2.matched = true;
+                    matchedPairs++;
+                    streak++;
+                    maxStreak = Math.max(maxStreak, streak);
+
+                    // Score calculation: base 100 * streak bonus
+                    const points = 100 * streak;
+                    score += points;
+
+                    if (streak > 1) {
+                        playSound('streak');
+                    } else {
+                        playSound('match');
+                    }
+
+                    createParticles(
+                        card1.x + card1.width / 2,
+                        card1.y + card1.height / 2,
+                        card1.color,
+                        20
+                    );
+                    createParticles(
+                        card2.x + card2.width / 2,
+                        card2.y + card2.height / 2,
+                        card2.color,
+                        20
+                    );
+
+                    shakeTimer = 5;
+                    shakeIntensity = 4;
+
+                    flippedCards = [];
+                    canFlip = true;
+                    updateUI();
+
+                    // Check win
+                    if (matchedPairs >= totalPairs) {
+                        endGame();
+                    }
+                } else {
+                    // No match
+                    streak = 1;
+                    playSound('noMatch');
+
+                    matchTimeout = setTimeout(() => {
+                        card1.flipped = false;
+                        card2.flipped = false;
+                        flippedCards = [];
+                        canFlip = true;
+                        matchTimeout = null;
+                    }, 800);
+                }
+            }
+        }
+
+        function update(dt) {
+            if (gameState !== 'playing') return;
+
+            // Update shake
+            if (shakeTimer > 0) shakeTimer -= dt * 60;
+
+            // Update card animations
+            for (let card of cards) {
+                // Flip animation
+                const targetFlip = (card.flipped || card.matched) ? 1 : 0;
+                card.flipProgress += (targetFlip - card.flipProgress) * 0.15 * dt * 60;
+                card.flipProgress = Math.max(0, Math.min(1, card.flipProgress));
+
+                // Match scale animation
+                if (card.matched) {
+                    card.matchScale = Math.max(0.9, card.matchScale - 0.02 * dt * 60);
+                } else {
+                    card.matchScale = Math.min(1, card.matchScale + 0.05 * dt * 60);
+                }
+            }
+
+            // Update particles
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.dx * dt * 60;
+                p.y += p.dy * dt * 60;
+                p.dy += 0.1 * dt * 60;
+                p.life -= p.decay * dt * 60;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+        }
+
+        function draw() {
+            // Screen shake
+            ctx.save();
+            if (shakeTimer > 0) {
+                ctx.translate(
+                    (Math.random() - 0.5) * shakeIntensity * 2,
+                    (Math.random() - 0.5) * shakeIntensity * 2
+                );
+            }
+
+            // Background
+            ctx.fillStyle = '#08081a';
+            ctx.fillRect(-10, -10, canvas.width + 20, canvas.height + 20);
+
+            // Grid lines
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.02)';
+            ctx.lineWidth = 1;
+            for (let x = 0; x < canvas.width; x += 30) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < canvas.height; y += 30) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // Draw cards
+            for (let card of cards) {
+                const fp = card.flipProgress;
+                const scale = card.matchScale;
+
+                // Calculate visual width based on flip progress (scale X)
+                const visualWidth = card.width * Math.abs(Math.cos(fp * Math.PI));
+                const centerX = card.x + card.width / 2;
+                const drawX = centerX - visualWidth / 2;
+
+                ctx.save();
+                ctx.translate(centerX, card.y + card.height / 2);
+                ctx.scale(scale, scale);
+                ctx.translate(-centerX, -(card.y + card.height / 2));
+
+                if (fp < 0.5) {
+                    // Face down
+                    // Card back
+                    const backGrad = ctx.createLinearGradient(card.x, card.y, card.x + card.width, card.y + card.height);
+                    backGrad.addColorStop(0, '#1a1a3e');
+                    backGrad.addColorStop(1, '#0d0d2a');
+                    ctx.fillStyle = backGrad;
+
+                    ctx.shadowBlur = card.hover ? 20 : 10;
+                    ctx.shadowColor = 'rgba(0, 255, 255, 0.3)';
+
+                    ctx.beginPath();
+                    ctx.roundRect(drawX, card.y, visualWidth, card.height, CARD_RADIUS);
+                    ctx.fill();
+
+                    // Border
+                    ctx.strokeStyle = card.hover ? 'rgba(0, 255, 255, 0.6)' : 'rgba(0, 255, 255, 0.2)';
+                    ctx.lineWidth = card.hover ? 2 : 1;
+                    ctx.beginPath();
+                    ctx.roundRect(drawX, card.y, visualWidth, card.height, CARD_RADIUS);
+                    ctx.stroke();
+
+                    // Question mark pattern
+                    if (visualWidth > 20) {
+                        ctx.fillStyle = 'rgba(0, 255, 255, 0.08)';
+                        ctx.font = `bold ${Math.min(card.height * 0.4, 30)}px Arial`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText('?', centerX, card.y + card.height / 2);
+                    }
+
+                    ctx.shadowBlur = 0;
+                } else {
+                    // Face up
+                    const isMatched = card.matched;
+
+                    // Card face
+                    const faceGrad = ctx.createLinearGradient(card.x, card.y, card.x + card.width, card.y + card.height);
+                    faceGrad.addColorStop(0, isMatched ? 'rgba(0, 255, 136, 0.15)' : 'rgba(20, 20, 50, 0.9)');
+                    faceGrad.addColorStop(1, isMatched ? 'rgba(0, 204, 106, 0.1)' : 'rgba(10, 10, 30, 0.9)');
+                    ctx.fillStyle = faceGrad;
+
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = isMatched ? 'rgba(0, 255, 136, 0.4)' : card.color;
+
+                    ctx.beginPath();
+                    ctx.roundRect(drawX, card.y, visualWidth, card.height, CARD_RADIUS);
+                    ctx.fill();
+
+                    // Border
+                    ctx.strokeStyle = isMatched ? '#00ff88' : card.color;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.roundRect(drawX, card.y, visualWidth, card.height, CARD_RADIUS);
+                    ctx.stroke();
+
+                    // Symbol
+                    if (visualWidth > 20) {
+                        ctx.shadowBlur = 20;
+                        ctx.shadowColor = card.color;
+                        ctx.fillStyle = card.color;
+                        ctx.font = `bold ${Math.min(card.height * 0.45, 36)}px Arial`;
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(card.symbol, centerX, card.y + card.height / 2);
+
+                        // Matched checkmark glow
+                        if (isMatched) {
+                            ctx.globalAlpha = 0.3 + Math.sin(Date.now() * 0.005) * 0.15;
+                            ctx.fillStyle = '#00ff88';
+                            ctx.font = `bold ${Math.min(card.height * 0.2, 16)}px Arial`;
+                            ctx.fillText('✓', centerX, card.y + card.height - 14);
+                            ctx.globalAlpha = 1;
+                        }
+
+                        ctx.shadowBlur = 0;
+                    }
+                }
+
+                ctx.restore();
+            }
+
+            // Draw particles
+            for (let p of particles) {
+                ctx.globalAlpha = p.life;
+                ctx.fillStyle = p.color;
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+            ctx.shadowBlur = 0;
+
+            ctx.restore();
+        }
+
+        function updateUI() {
+            document.getElementById('moves').textContent = moves;
+            document.getElementById('matches').textContent = `${matchedPairs} / ${totalPairs}`;
+            document.getElementById('streak').textContent = `x${streak}`;
+        }
+
+        function formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return `${m}:${s.toString().padStart(2, '0')}`;
+        }
+
+        function calculateStars() {
+            const diff = getCurrentDifficulty();
+            const minMoves = totalPairs; // Perfect game
+            const ratio = minMoves / Math.max(moves, 1);
+
+            if (ratio >= 0.9) return 3;
+            if (ratio >= 0.6) return 2;
+            return 1;
+        }
+
+        function endGame() {
+            gameState = 'won';
+            clearInterval(timerInterval);
+
+            if (score > highScore) {
+                highScore = score;
+                try {
+                    localStorage.setItem('neonMemoryHighScore', highScore);
+                } catch(e) {}
+            }
+
+            playSound('win');
+
+            const stars = calculateStars();
+            document.getElementById('starRating').textContent = '★'.repeat(stars) + '☆'.repeat(3 - stars);
+            document.getElementById('finalMoves').textContent = moves;
+            document.getElementById('finalTime').textContent = formatTime(gameTime);
+            document.getElementById('finalScore').textContent = score;
+            document.getElementById('bestScore').textContent = highScore;
+            document.getElementById('winScreen').classList.remove('hidden');
+        }
+
+        function startGame() {
+            initAudio();
+
+            const diff = getCurrentDifficulty();
+            gameState = 'playing';
+            matchedPairs = 0;
+            moves = 0;
+            streak = 1;
+            maxStreak = 1;
+            score = 0;
+            gameTime = 0;
+            flippedCards = [];
+            canFlip = true;
+            particles = [];
+            shakeTimer = 0;
+
+            if (matchTimeout) {
+                clearTimeout(matchTimeout);
+                matchTimeout = null;
+            }
+
+            createCards();
+            updateUI();
+            document.getElementById('timer').textContent = '0:00';
+
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (gameState === 'playing') {
+                    gameTime++;
+                    document.getElementById('timer').textContent = formatTime(gameTime);
+                }
+            }, 1000);
+
+            document.getElementById('startScreen').classList.add('hidden');
+            document.getElementById('winScreen').classList.add('hidden');
+        }
+
+        // Game Loop
+        function gameLoop(timestamp) {
+            deltaTime = Math.min((timestamp - lastTime) / 1000, 0.05);
+            lastTime = timestamp;
+
+            update(deltaTime);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Event Listeners
+        canvas.addEventListener('click', (e) => {
+            if (gameState !== 'playing') return;
+
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const mx = (e.clientX - rect.left) * scaleX;
+            const my = (e.clientY - rect.top) * scaleY;
+
+            for (let card of cards) {
+                if (mx >= card.x && mx <= card.x + card.width &&
+                    my >= card.y && my <= card.y + card.height) {
+                    flipCard(card);
+                    break;
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const mx = (e.clientX - rect.left) * scaleX;
+            const my = (e.clientY - rect.top) * scaleY;
+
+            hoverCard = null;
+            for (let card of cards) {
+                card.hover = false;
+                if (mx >= card.x && mx <= card.x + card.width &&
+                    my >= card.y && my <= card.y + card.height) {
+                    if (!card.flipped && !card.matched) {
+                        card.hover = true;
+                        hoverCard = card;
+                        canvas.style.cursor = 'pointer';
+                    }
+                }
+            }
+
+            if (!hoverCard) {
+                canvas.style.cursor = 'default';
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            for (let card of cards) {
+                card.hover = false;
+            }
+            hoverCard = null;
+        });
+
+        // Button listeners
+        document.getElementById('playBtn').addEventListener('click', startGame);
+        document.getElementById('startBtn').addEventListener('click', startGame);
+        document.getElementById('retryBtn').addEventListener('click', startGame);
+
+        // Init
+        createCards();
+        updateUI();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>

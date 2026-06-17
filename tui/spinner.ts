@@ -2,13 +2,12 @@ import chalk from "chalk";
 
 // ── Biological Neuro-States ───────────────────────────────────────────────
 const METABOLIC_RATES = {
-    HYPER: 45,   // Rapid heart rate for immediate tasks
-    STEADY: 75,  // Cruising breath rhythm
-    STRESSED: 110, // Fast, irregular twitching
-    HIBERNATE: 180 // Deep, slow dynamic sighing
+    HYPER: 45,   
+    STEADY: 75,  
+    STRESSED: 110, 
+    HIBERNATE: 180 
 };
 
-// Shifting structural shapes based on kinetic mood
 const MOODS = {
     PULSE:   ["⬖", "⬘", "⬗", "⬙"],
     CRAWL:   ["•««««", "»•«««", "»»•««", "»»»•«", "»»»»•", "»»»•«", "»»•««", "»•«««"],
@@ -17,22 +16,19 @@ const MOODS = {
 };
 
 const C = {
-    // Dynamic color gradient engine mappings
     vitality: (pct: number) => {
-        // Blends from energetic Violet/Cyan to a stressed Crimson Magenta as fatigue mounts
-        if (pct < 0.4) return chalk.bold.hex("#a78bfa"); // Calm Lavender
-        if (pct < 0.7) return chalk.bold.hex("#38bdf8"); // Processing Cyan
-        if (pct < 0.9) return chalk.bold.hex("#fb7185"); // Agitated Rose
-        return chalk.bold.hex("#f43f5e");               // High-Panic Crimson
+        if (pct < 0.4) return chalk.bold.hex("#a78bfa"); 
+        if (pct < 0.7) return chalk.bold.hex("#38bdf8"); 
+        if (pct < 0.9) return chalk.bold.hex("#fb7185"); 
+        return chalk.bold.hex("#f43f5e");               
     },
     text: chalk.hex("#f3f4f6"),
     dim: chalk.hex("#4b5563"),
     success: chalk.bold.hex("#34d399"),
     error: chalk.bold.hex("#ef4444"),
     telemetry: chalk.hex("#60a5fa"),
-    // Streaming-active palette
-    streamActive: chalk.bold.hex("#4ade80"),   // Bright green for live output arrow
-    streamBullet: chalk.hex("#22c55e"),        // Green pulsing bullet
+    streamActive: chalk.bold.hex("#4ade80"),   
+    streamBullet: chalk.hex("#22c55e"),        
 };
 
 function formatElapsed(ms: number): string {
@@ -41,15 +37,10 @@ function formatElapsed(ms: number): string {
     return `${s}.${dec}s`;
 }
 
-// ── Token Telemetry State ───────────────────────────────────────────────
 export interface TokenState {
-    /** Cumulative confirmed input tokens from completed steps. */
     inputConfirmed: number;
-    /** Cumulative confirmed output tokens from completed steps. */
     outputConfirmed: number;
-    /** Real-time chunk counter — bumps on every stream iteration. */
     liveChunks: number;
-    /** Whether text is actively streaming from the model right now. */
     streaming: boolean;
 }
 
@@ -60,7 +51,6 @@ const INITIAL_TOKEN_STATE: TokenState = Object.freeze({
     streaming: false,
 });
 
-// ── LanguageModelUsage — SDK-agnostic shape ─────────────────────────────
 export interface LanguageModelUsage {
     promptTokens?: number;
     completionTokens?: number;
@@ -68,17 +58,12 @@ export interface LanguageModelUsage {
     outputTokens?: number;
 }
 
-// ── Spinner Context ──────────────────────────────────────────────────────
 export interface SpinnerContext {
-    /** Change the primary spinner text label. */
     updateMessage: (msg: string) => void;
-    /** Set a standard metric / telemetry indicator beside the loader. */
     updateMetric: (metric: string) => void;
-    /** Bump the live streaming chunk counter and flip streaming to true. */
     incrementOutputChunk: () => void;
-    /** Reconcile confirmed token counts from a completed step. */
+    writeStreamChunk: (chunk: string) => void; 
     updateTokens: (usage: LanguageModelUsage) => void;
-    /** Clear the current temporary loop row and print a permanent milestone line. */
     logStep: (text: string) => void;
 }
 
@@ -89,7 +74,6 @@ export interface SpinnerOptions {
     hideTime?: boolean;
 }
 
-// ── The Autonomous Organism Engine ────────────────────────────────────────
 class AutonomousLoader {
     private timer: ReturnType<typeof setTimeout> | null = null;
     private currentInterval = METABOLIC_RATES.STEADY;
@@ -98,8 +82,6 @@ class AutonomousLoader {
     private message: string;
     private metric = "";
     private readonly showTime: boolean;
-
-    /** Token telemetry state — drives the inline token counter display. */
     private tokenState: TokenState = { ...INITIAL_TOKEN_STATE };
 
     constructor(message: string, showTime = true) {
@@ -124,6 +106,37 @@ class AutonomousLoader {
         this.tokenState.streaming = true;
     }
 
+    public writeStreamChunk(chunk: string) {
+        if (!chunk) return;
+        
+        if (!this.tokenState.streaming) {
+            // First token packet has dropped! Clear active spinner row cleanly
+            process.stdout.write("\r\u001B[K");
+            this.tokenState.streaming = true;
+        }
+        
+        // Clear the projected spinner row down below before writing the next raw text chunk
+        process.stdout.write("\u001B[s\n\r\u001B[K\u001B[u");
+        
+        process.stdout.write(chunk);
+        this.tokenState.liveChunks++;
+        
+        // Push an instant fluid render layout update
+        this.render();
+    }
+
+    public logStep(text: string) {
+        if (this.tokenState.streaming) {
+            // Clear the projected spinner down below cleanly
+            process.stdout.write("\u001B[s\n\r\u001B[K\u001B[u");
+            // Push an intentional newline shift to cleanly separate from the text stream sequence block
+            process.stdout.write("\n");
+            this.tokenState.streaming = false;
+            this.tokenState.liveChunks = 0;
+        }
+        process.stdout.write(`\r\u001B[K${text}\n`);
+    }
+
     public updateTokens(usage: LanguageModelUsage) {
         const raw = usage as any;
         const inTokens  = raw.inputTokens   ?? raw.promptTokens     ?? 0;
@@ -132,12 +145,10 @@ class AutonomousLoader {
         this.tokenState.inputConfirmed  += inTokens;
         this.tokenState.outputConfirmed += outTokens;
 
-        // Reset live streaming counters — step is done, counts are confirmed
         this.tokenState.liveChunks = 0;
-        this.tokenState.streaming  = false;
+        // Adjusted: Do not force streaming to false here; leave state teardown to logStep transitions
     }
 
-    /** Returns a snapshot of the current token state (read-only copy). */
     public getTokenSnapshot(): Readonly<TokenState> {
         return { ...this.tokenState };
     }
@@ -146,7 +157,7 @@ class AutonomousLoader {
         this.startTime = Date.now();
         this.tickCount = 0;
         this.tokenState = { ...INITIAL_TOKEN_STATE };
-        process.stdout.write("\u001B[?25l"); // Clean interface focus mode
+        process.stdout.write("\u001B[?25l"); 
         this.loop();
     }
 
@@ -168,7 +179,6 @@ class AutonomousLoader {
     private render(): void {
         const ms = this.elapsed;
         const fatigue = Math.min(ms / 12000, 1.0);
-
         let shape = "";
         
         if (fatigue > 0.8) {
@@ -194,7 +204,6 @@ class AutonomousLoader {
             } else {
                 outPart = C.dim(`↓${effectiveOutput}`);
             }
-
             tokenDisplay = ` ${C.dim("·")} ${inPart} ${outPart} ${C.dim("tokens")}`;
         }
 
@@ -205,7 +214,15 @@ class AutonomousLoader {
         const line = `  ${coreNode}  ${C.text(this.message)}${tokenDisplay}${telemetry}${ageIndicator}`;
 
         const cols = process.stdout.columns || 80;
-        process.stdout.write(`\r${"\u001B[K"}${line.slice(0, cols - 1)}`);
+        const truncatedLine = line.slice(0, cols - 1);
+
+        if (this.tokenState.streaming) {
+            // Project the live breathing spinner seamlessly exactly 1 line under the streaming output cursor position
+            process.stdout.write(`\u001B[s\n\r\u001B[K${truncatedLine}\u001B[u`);
+        } else {
+            // Standard flush on the current active row line
+            process.stdout.write(`\r\u001B[K${truncatedLine}`);
+        }
     }
 
     stop(finalLine: string): void {
@@ -213,11 +230,15 @@ class AutonomousLoader {
             clearTimeout(this.timer);
             this.timer = null;
         }
+        if (this.tokenState.streaming) {
+            process.stdout.write("\u001B[s\n\r\u001B[K\u001B[u");
+            process.stdout.write("\n");
+            this.tokenState.streaming = false;
+        }
         process.stdout.write(`\r${"\u001B[K"}${finalLine}\n\u001B[?25h`);
     }
 }
 
-// ── Public API Orchestration ────────────────────────────────────────────
 export async function withSpinner<T>(
     opts: SpinnerOptions,
     task: (ctx: SpinnerContext) => Promise<T>,
@@ -229,11 +250,9 @@ export async function withSpinner<T>(
         updateMessage: (msg) => loader.updateMessage(msg),
         updateMetric: (metric) => loader.updateMetric(metric),
         incrementOutputChunk: () => loader.incrementOutputChunk(),
+        writeStreamChunk: (chunk) => loader.writeStreamChunk(chunk), 
         updateTokens: (usage) => loader.updateTokens(usage),
-        logStep: (text) => {
-            // Carriage return and clean the single-line spinner lane, then commit the text newline safely
-            process.stdout.write(`\r\u001B[K${text}\n`);
-        }
+        logStep: (text) => loader.logStep(text)
     };
 
     try {

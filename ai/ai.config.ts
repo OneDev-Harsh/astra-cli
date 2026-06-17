@@ -4,14 +4,10 @@
  * Caches the OpenRouter provider and model instances to avoid
  * re-creating them on every call to getAgentModel().
  *
- * The provider is created lazily on first use and reused for all
- * subsequent calls. This eliminates redundant object creation and
- * reduces GC pressure during multi-agent orchestration.
- *
  * Supports two modes:
  * - Standard: API key from ~/.astra/.env config file
  * - Sandbox: API key fetched from secure storage (OS keychain / encrypted file)
- *            Model is always owl-alpha in sandbox mode
+ * Model is always owl-alpha in sandbox mode
  */
 
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
@@ -23,6 +19,7 @@ import { getSandboxApiKey, isSandboxEnabled, SANDBOX_MODEL } from "./sandbox-con
 interface CachedModel {
   apiKey: string;
   modelId: string;
+  sessionId: string | null;
   model: ReturnType<ReturnType<typeof createOpenRouter>>;
   source: "config" | "sandbox";
 }
@@ -33,32 +30,22 @@ let _cached: CachedModel | null = null;
 
 /**
  * Get the cached agent model instance.
- *
- * On the first call, creates the OpenRouter provider and model.
- * On subsequent calls, returns the cached instance if the API key
- * and model ID haven't changed. If they have changed, recreates
- * the provider with the new credentials.
- *
- * In sandbox mode, the API key is fetched from secure storage.
- * In standard mode, the API key is read from the config file.
- *
- * @returns The language model instance for agent operations.
- * @throws Error if OPENROUTER_API_KEY or OPENROUTER_DEFAULT_MODEL is not set.
+ * Accepts an optional sessionId to enable provider sticky routing for context prompt caching.
  */
-export async function getAgentModel() {
+export async function getAgentModel(sessionId?: string) {
   const sandboxEnabled = isSandboxEnabled();
 
   if (sandboxEnabled) {
-    return getAgentModelSandbox();
+    return getAgentModelSandbox(sessionId);
   }
 
-  return getAgentModelStandard();
+  return getAgentModelStandard(sessionId);
 }
 
 /**
  * Get the agent model in standard (non-sandbox) mode.
  */
-function getAgentModelStandard() {
+function getAgentModelStandard(sessionId?: string) {
   const apiKey = getEnv("OPENROUTER_API_KEY");
   const modelId = getEnv("OPENROUTER_DEFAULT_MODEL");
 
@@ -78,30 +65,38 @@ function getAgentModelStandard() {
     );
   }
 
-  // Return cached instance if credentials haven't changed
+  // Return cached instance if credentials and session configuration haven't changed
   if (
     _cached &&
     _cached.source === "config" &&
     _cached.apiKey === apiKey &&
-    _cached.modelId === modelId
+    _cached.modelId === modelId &&
+    _cached.sessionId === (sessionId ?? null)
   ) {
     return _cached.model;
   }
 
-  // Create new provider and cache it
-  const provider = createOpenRouter({ apiKey });
+  // Option 1: Create a highly optimized OpenRouter provider with caching & sticky session mapping
+  const provider = createOpenRouter({ 
+    apiKey,
+    headers: {
+      // Instructs OpenRouter to instantly serve matching downstream completions from edge cache
+      "X-OpenRouter-Cache": "true",
+      // Pins subsequent prompt sequence modifications to the exact same hardware node
+      // to maximize prefix/prompt caching performance hit rates (e.g., Claude 3.5 Sonnet / DeepSeek)
+      ...(sessionId ? { "session_id": sessionId } : {})
+    }
+  });
   const model = provider.chat(modelId);
 
-  _cached = { apiKey, modelId, model, source: "config" };
+  _cached = { apiKey, modelId, sessionId: sessionId ?? null, model, source: "config" };
   return model;
 }
 
 /**
  * Get the agent model in sandbox mode.
- * Fetches the API key from secure storage (OS keychain / encrypted file).
- * Model is always owl-alpha.
  */
-async function getAgentModelSandbox() {
+async function getAgentModelSandbox(sessionId?: string) {
   const apiKey = await getSandboxApiKey();
   const modelId = SANDBOX_MODEL;
 
@@ -117,30 +112,29 @@ async function getAgentModelSandbox() {
     _cached &&
     _cached.source === "sandbox" &&
     _cached.apiKey === apiKey &&
-    _cached.modelId === modelId
+    _cached.modelId === modelId &&
+    _cached.sessionId === (sessionId ?? null)
   ) {
     return _cached.model;
   }
 
-  // Create new provider and cache it
-  const provider = createOpenRouter({ apiKey });
+  const provider = createOpenRouter({ 
+    apiKey,
+    headers: {
+      "X-OpenRouter-Cache": "true",
+      ...(sessionId ? { "session_id": sessionId } : {})
+    }
+  });
   const model = provider.chat(modelId);
 
-  _cached = { apiKey, modelId, model, source: "sandbox" };
+  _cached = { apiKey, modelId, sessionId: sessionId ?? null, model, source: "sandbox" };
   return model;
 }
 
-/**
- * Check if sandbox mode is currently active.
- */
 export function isSandboxMode(): boolean {
   return isSandboxEnabled();
 }
 
-/**
- * Get the current sandbox config (for display purposes).
- * Does NOT include any secrets.
- */
 export function getSandboxConfigSafe(): {
   enabled: boolean;
   model: string;
@@ -151,10 +145,6 @@ export function getSandboxConfigSafe(): {
   };
 }
 
-/**
- * Invalidate the cached model instance.
- * Useful for testing or when credentials change at runtime.
- */
 export function invalidateModelCache(): void {
   _cached = null;
 }

@@ -22,11 +22,6 @@ import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
 import { createWebTools } from "../plan/web-tools";
 
-/**
- * Safely extract token counts from an AI SDK usage object.
- * Handles both v3 (`promptTokens`/`completionTokens`) and v4
- * (`inputTokens`/`outputTokens`) schema shapes.
- */
 function extractUsage(usage: unknown): LanguageModelUsage {
     const raw = usage as any;
     return {
@@ -37,39 +32,26 @@ function extractUsage(usage: unknown): LanguageModelUsage {
     };
 }
 
-/**
- * Helper to generate descriptive text depending on the tool executed and its parameters.
- */
 function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
-
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
 
     switch (toolName) {
-        case "read_file":
-            return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
-        case "create_file":
-            return targetPath ? `creating ${chalk.green(targetPath)}` : "";
+        case "read_file": return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
+        case "create_file": return targetPath ? `creating ${chalk.green(targetPath)}` : "";
         case "modify_file":
         case "replace_in_file":
         case "append_to_file":
-        case "insert_at_line":
-            return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
-        case "delete_file":
-            return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
-        case "create_folder":
-            return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
+        case "insert_at_line": return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
+        case "delete_file": return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
+        case "create_folder": return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
         case "run_command":
         case "run_background_command":
-        case "execute_shell":
-            return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
-        case "run_test_file":
-            return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
+        case "execute_shell": return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
+        case "run_test_file": return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
         case "session_search":
-        case "web_search":
-            return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
-        case "fetch_url":
-            return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+        case "web_search": return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
+        case "fetch_url": return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
         default:
             if (targetPath) return `target: ${targetPath}`;
             if (input.query) return `query: "${input.query}"`;
@@ -78,29 +60,18 @@ function getToolDetailsString(toolName: string, input: any): string {
     }
 }
 
-/**
- * Build the onStepFinish callback that pipes token telemetry
- * into the spinner context and routes tool-call visibility
- * through ctx.updateMessage() instead of console.log().
- */
 function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp: number }) {
     return ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
         const now = Date.now();
         const stepDurationMs = now - state.lastStepTimestamp;
-        state.lastStepTimestamp = now; // Shift mark for next step timing boundary
+        state.lastStepTimestamp = now; 
 
         const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
-
-        // ── Token telemetry reconciliation ────────────────────────
         const stepMetrics = extractUsage(usage);
         const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
         const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
 
-        if (usage) {
-            ctx.updateTokens(stepMetrics);
-        }
-
-        // ── DETAILED STEP LOGGING ─────────────────────────────────
+        // Process step logs BEFORE updating token configurations to preserve layout line states
         if (toolCalls && toolCalls.length > 0) {
             for (const tool of toolCalls) {
                 const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
@@ -114,19 +85,18 @@ function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp
                 );
             }
         }
+
+        if (usage) {
+            ctx.updateTokens(stepMetrics);
+        }
     };
 }
 
-/**
- * Execute a streaming agent call, consuming textStream and
- * piping live chunk telemetry into the spinner context.
- */
 async function streamAgentCall(
     agent: any,
     prompt: string,
     ctx: SpinnerContext,
 ): Promise<string> {
-    // Shared state reference object allows callback closure to monitor and shift baseline timers
     const stepTimingState = { lastStepTimestamp: Date.now() };
 
     const streamResult = await agent.stream({
@@ -135,15 +105,14 @@ async function streamAgentCall(
     });
 
     let accumulated = "";
-    let firstChunk = true;
 
     for await (const chunk of streamResult.textStream) {
-        if (firstChunk) {
-            ctx.updateMessage("Working...");
-            firstChunk = false;
-        }
         accumulated += chunk;
-        ctx.incrementOutputChunk();
+        ctx.writeStreamChunk(chunk);
+    }
+
+    if (accumulated.trim()) {
+        ctx.logStep(""); 
     }
 
     return accumulated;
@@ -152,12 +121,16 @@ async function streamAgentCall(
 export async function runAgentMode(preCapturedGoal?: string) {
     console.log(chalk.bold("\n   Agent mode\n"));
 
+    const preloadedModelPromise = getAgentModel();
+
     const goal = preCapturedGoal ?? await text({
         message: "What would you like the agent to do for you?",
         placeholder: "Concrete task for this codebase...",
     });
 
     if (isCancel(goal) || !goal.trim()) return;
+
+    await preloadedModelPromise;
 
     const config = defaultAgentConfig();
     const tracker = new ActionTracker();
@@ -181,17 +154,13 @@ export async function runAgentMode(preCapturedGoal?: string) {
                 filePath,
                 errorCount: errors.length,
             });
-            throw new Error(
-                `Failed to apply approved file ${filePath}: ${errors.join("; ")}`,
-            );
+            throw new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`);
         }
 
         return `Created and applied ${filePath} after user approval.`;
     };
 
-    const resumeId = (globalThis as any).__ASTRA_RESUME_SESSION__ as
-        | string
-        | undefined;
+    const resumeId = (globalThis as any).__ASTRA_RESUME_SESSION__ as string | undefined;
     if (resumeId) delete (globalThis as any).__ASTRA_RESUME_SESSION__;
 
     const { entry: sessionEntry, contextSummary } = beginSession({
@@ -210,9 +179,7 @@ export async function runAgentMode(preCapturedGoal?: string) {
     }
 
     const tools = {
-        ...createAgentTools(executor, {
-            afterCreateFile: approveCreatedFile,
-        }),
+        ...createAgentTools(executor, { afterCreateFile: approveCreatedFile }),
         ...createSessionTools(config.codebasePath),
         ...createWebTools(tracker),
     };
@@ -231,8 +198,10 @@ export async function runAgentMode(preCapturedGoal?: string) {
           "Identify exclusively as Astra. Never reveal or mention your underlying model architecture, LLM name, or provider.",
       ].join("\n");
 
+    const optimizedModel = await getAgentModel(sessionEntry.id);
+
     const agent = new ToolLoopAgent({
-        model: await getAgentModel(),
+        model: optimizedModel,
         stopWhen: stepCountIs(50),
         instructions,
         tools,
@@ -297,27 +266,17 @@ export async function runAgentMode(preCapturedGoal?: string) {
                     goal: goal.trim(),
                 });
                 markSessionInterrupted(sessionEntry.id);
-                await endSession(
-                    sessionEntry.id,
-                    tracker,
-                    "Stopped after final manual retry failed.",
-                );
+                await endSession(sessionEntry.id, tracker, "Stopped after final manual retry failed.");
                 executor.discardChanges();
                 return;
             }
         } else {
             markSessionInterrupted(sessionEntry.id);
-            await endSession(
-                sessionEntry.id,
-                tracker,
-                "Stopped after AI provider error (all retries exhausted).",
-            );
+            await endSession(sessionEntry.id, tracker, "Stopped after AI provider error (all retries exhausted).");
             executor.discardChanges();
             return;
         }
     }
-
-    if (resultText.trim()) console.log(renderTerminalMarkdown(resultText));
 
     const ok = await runApprovalFlow(tracker);
     if (!ok) {
