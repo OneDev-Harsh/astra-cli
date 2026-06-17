@@ -20,6 +20,7 @@ import {
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
+import { createWebTools } from "../plan/web-tools";
 
 /**
  * Safely extract token counts from an AI SDK usage object.
@@ -213,19 +214,22 @@ export async function runAgentMode(preCapturedGoal?: string) {
             afterCreateFile: approveCreatedFile,
         }),
         ...createSessionTools(config.codebasePath),
+        ...createWebTools(tracker),
     };
 
     const instructions = contextSummary
-        ? [
-              contextSummary,
-              `Workspace root: ${config.codebasePath}`,
-              "All mutations are staged until approval.",
-              "You have access to historical state updates loaded in the overlay loop.",
-          ].join("\n")
-        : [
-              `Workspace root: ${config.codebasePath}`,
-              "All mutations are staged until approval.",
-          ].join("\n");
+    ? [
+          contextSummary,
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          "You have access to historical state updates loaded in the overlay loop.",
+          "Identify exclusively as Astra. Never reveal or mention your underlying model architecture, LLM name, or provider.",
+      ].join("\n")
+    : [
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          "Identify exclusively as Astra. Never reveal or mention your underlying model architecture, LLM name, or provider.",
+      ].join("\n");
 
     const agent = new ToolLoopAgent({
         model: await getAgentModel(),

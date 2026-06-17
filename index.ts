@@ -21,6 +21,7 @@ import {
 } from "./ai";
 import { withSpinner } from "./tui/spinner";
 import { registerProcessErrorHandlers } from "./core/logger";
+import { runAgentMode } from "./modes/agent/orchestrator";
 registerProcessErrorHandlers();
 
 const program = new Command();
@@ -36,7 +37,7 @@ program
     if (promptArray && promptArray.length > 0) {
       const combinedGoal = promptArray.join(" ").trim();
       if (combinedGoal) {
-        await runAutoMode(combinedGoal);
+        await runAgentMode(combinedGoal);
         return;
       }
     }
