@@ -1,33 +1,33 @@
-import { text, isCancel, confirm } from "@clack/prompts";
+import { isCancel, text } from "@clack/prompts";
 import chalk from "chalk";
-import { generatePlan } from "./planner";
-import { printPlan, selectSteps } from "./selection";
 import { defaultAgentConfig } from "../agent/types";
 import { ActionTracker } from "../agent/action-tracker";
 import { ToolExecutor } from "../agent/tool-executor";
 import { createAgentTools } from "../agent/agent-tools";
 import { stepCountIs, ToolLoopAgent } from "ai";
-import { getAgentModel } from "../../ai";
-import type { PlanStep } from "./types";
+import { getAgentModel, withAiRetry, getRetryConfig } from "../../ai";
 import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { runApprovalFlow } from "../agent/approval";
-import { createWebTools } from "./web-tools";
 import { withSpinner } from "../../tui/spinner";
 import type { SpinnerContext, LanguageModelUsage } from "../../tui/spinner";
-import { beginSession, endSession, markSessionInterrupted } from "../../session";
+import {
+    beginSession,
+    endSession,
+    markSessionInterrupted,
+    formatSessionLine,
+    readSessionActions,
+} from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
+import { createWebTools } from "../plan/web-tools";
 
-function stepPrompt(goal: string, step: PlanStep): string {
-    return [`Goal: ${goal}`, `Step: ${step.title}`, step.description].join("\n");
-}
+const customAstraInstruction = 
+    "You are Astra, an AI-native development CLI companion tool built to help " +
+    "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
+    "who you are, what your name is, or what model you are running on, you must always identify " +
+    "yourself exclusively as Astra. Do not mention your underlying model architecture or provider.";
 
-/**
- * Safely extract token counts from an AI SDK usage object.
- * Handles both v3 (`promptTokens`/`completionTokens`) and v4
- * (`inputTokens`/`outputTokens`) schema shapes.
- */
 function extractUsage(usage: unknown): LanguageModelUsage {
     const raw = usage as any;
     return {
@@ -38,39 +38,26 @@ function extractUsage(usage: unknown): LanguageModelUsage {
     };
 }
 
-/**
- * Helper to generate descriptive text depending on the tool executed and its parameters.
- */
 function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
-
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
 
     switch (toolName) {
-        case "read_file":
-            return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
-        case "create_file":
-            return targetPath ? `creating ${chalk.green(targetPath)}` : "";
+        case "read_file": return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
+        case "create_file": return targetPath ? `creating ${chalk.green(targetPath)}` : "";
         case "modify_file":
         case "replace_in_file":
         case "append_to_file":
-        case "insert_at_line":
-            return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
-        case "delete_file":
-            return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
-        case "create_folder":
-            return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
+        case "insert_at_line": return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
+        case "delete_file": return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
+        case "create_folder": return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
         case "run_command":
         case "run_background_command":
-        case "execute_shell":
-            return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
-        case "run_test_file":
-            return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
+        case "execute_shell": return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
+        case "run_test_file": return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
         case "session_search":
-        case "web_search":
-            return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
-        case "fetch_url":
-            return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+        case "web_search": return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
+        case "fetch_url": return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
         default:
             if (targetPath) return `target: ${targetPath}`;
             if (input.query) return `query: "${input.query}"`;
@@ -79,29 +66,18 @@ function getToolDetailsString(toolName: string, input: any): string {
     }
 }
 
-/**
- * Build the onStepFinish callback that pipes token telemetry
- * into the spinner context and routes tool-call visibility
- * through ctx.updateMessage() instead of console.log().
- */
 function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp: number }) {
     return ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
         const now = Date.now();
         const stepDurationMs = now - state.lastStepTimestamp;
-        state.lastStepTimestamp = now;
+        state.lastStepTimestamp = now; 
 
         const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
-
-        // ── Token telemetry reconciliation ────────────────────────
         const stepMetrics = extractUsage(usage);
         const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
         const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
 
-        if (usage) {
-            ctx.updateTokens(stepMetrics);
-        }
-
-        // ── DETAILED STEP LOGGING ─────────────────────────────────
+        // Process step logs BEFORE updating token configurations to preserve layout line states
         if (toolCalls && toolCalls.length > 0) {
             for (const tool of toolCalls) {
                 const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
@@ -115,13 +91,13 @@ function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp
                 );
             }
         }
+
+        if (usage) {
+            ctx.updateTokens(stepMetrics);
+        }
     };
 }
 
-/**
- * Execute a streaming agent call, consuming textStream and
- * piping live chunk telemetry into the spinner context.
- */
 async function streamAgentCall(
     agent: any,
     prompt: string,
@@ -135,22 +111,23 @@ async function streamAgentCall(
     });
 
     let accumulated = "";
-    let firstChunk = true;
 
     for await (const chunk of streamResult.textStream) {
-        if (firstChunk) {
-            ctx.updateMessage("Planning...");
-            firstChunk = false;
-        }
         accumulated += chunk;
-        ctx.incrementOutputChunk();
+        ctx.writeStreamChunk(chunk);
+    }
+
+    if (accumulated.trim()) {
+        ctx.logStep(""); 
     }
 
     return accumulated;
 }
 
-export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
-    console.log(chalk.bold("\nPlan Mode\n"));
+export async function runPlanMode(preCapturedGoal?: string) {
+    console.log(chalk.bold("\n   Agent mode\n"));
+
+    const preloadedModelPromise = getAgentModel();
 
     const goal = preCapturedGoal ?? await text({
         message: "What would you like the agent to do for you?",
@@ -158,6 +135,8 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
     });
 
     if (isCancel(goal) || !goal.trim()) return;
+
+    await preloadedModelPromise;
 
     const config = defaultAgentConfig();
     const tracker = new ActionTracker();
@@ -177,120 +156,142 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
         const { errors } = executor.applyApprovedFromTracker();
         if (errors.length) {
             executor.discardStagedPath(filePath);
-            logAndContinue("plan", new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`), {
+            logAndContinue("agent", new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`), {
                 filePath,
                 errorCount: errors.length,
             });
-            throw new Error(
-                `Failed to apply approved file ${filePath}: ${errors.join("; ")}`,
-            );
+            throw new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`);
         }
 
         return `Created and applied ${filePath} after user approval.`;
     };
 
-    const { entry: sessionEntry } = beginSession({
+    const resumeId = (globalThis as any).__ASTRA_RESUME_SESSION__ as string | undefined;
+    if (resumeId) delete (globalThis as any).__ASTRA_RESUME_SESSION__;
+
+    const { entry: sessionEntry, contextSummary } = beginSession({
         workspacePath: config.codebasePath,
-        mode: "plan",
+        mode: "agent",
         goal: goal.trim(),
+        resumeSessionId: resumeId,
     });
 
-    let plan;
-    while (true) {
-        try {
-            plan = await generatePlan(goal);
-            break;
-        } catch (error) {
-            logAndContinue("plan", error, { phase: "generate-plan", goal: goal.trim() });
-            const retry = await promptToRetryAiCall(
-                "Plan generation hit a provider error.",
-                error,
-            );
-            if (retry) continue;
+    if (resumeId) {
+        console.log(chalk.dim("\n   Resuming previous session transaction history...\n"));
+        const historicActions = readSessionActions(resumeId);
+        if (historicActions.length > 0) {
+            executor.hydrateFromActions(historicActions);
+        }
+    }
+
+    const tools = {
+        ...createAgentTools(executor, { afterCreateFile: approveCreatedFile }),
+        ...createSessionTools(config.codebasePath),
+        ...createWebTools(tracker),
+    };
+
+    const instructions = contextSummary
+    ? [
+          contextSummary,
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          "You have access to historical state updates loaded in the overlay loop.",
+          customAstraInstruction,
+      ].join("\n")
+    : [
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          customAstraInstruction,
+      ].join("\n");
+
+    const optimizedModel = await getAgentModel(sessionEntry.id);
+
+    const agent = new ToolLoopAgent({
+        model: optimizedModel,
+        stopWhen: stepCountIs(50),
+        instructions,
+        tools,
+    });
+
+    let resultText = "";
+    const retryConfig = getRetryConfig();
+
+    try {
+        resultText = await withAiRetry(
+            () =>
+                withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
+                ),
+            "The agent hit a provider error.",
+            {
+                enabled: retryConfig.enabled,
+                retryConfig: {
+                    maxRetries: retryConfig.maxRetries,
+                    baseDelayMs: 1000,
+                    maxDelayMs: 30000,
+                    backoffMultiplier: 2,
+                    jitter: true,
+                    maxJitterMs: 1000,
+                    version: 1,
+                } as any,
+                showProgress: retryConfig.showProgress,
+                askBeforeRetry: false,
+            },
+        );
+    } catch (error) {
+        logAndContinue("agent", error, {
+            phase: "primary-run",
+            sessionId: sessionEntry.id,
+            goal: goal.trim(),
+        });
+
+        const manualRetry = await promptToRetryAiCall(
+            "Automatic retries exhausted. Would you like to try once more?",
+            error,
+        );
+
+        if (manualRetry) {
+            try {
+                resultText = await withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
+                );
+            } catch (finalError) {
+                logAndContinue("agent", finalError, {
+                    phase: "manual-retry",
+                    sessionId: sessionEntry.id,
+                    goal: goal.trim(),
+                });
+                markSessionInterrupted(sessionEntry.id);
+                await endSession(sessionEntry.id, tracker, "Stopped after final manual retry failed.");
+                executor.discardChanges();
+                return;
+            }
+        } else {
             markSessionInterrupted(sessionEntry.id);
-            await endSession(sessionEntry.id, tracker, "Stopped while generating a plan.");
+            await endSession(sessionEntry.id, tracker, "Stopped after AI provider error (all retries exhausted).");
             executor.discardChanges();
             return;
         }
     }
 
-    printPlan(plan);
-
-    const selected = await selectSteps(plan);
-    if (selected.length === 0) return;
-
-    const proceed = await confirm({
-        message: `Execute ${selected.length} step(s)`,
-        initialValue: true,
-    });
-
-    if (isCancel(proceed) || !proceed) return;
-
-    const tools = {
-        ...createAgentTools(executor, {
-            afterCreateFile: approveCreatedFile,
-        }),
-        ...createWebTools(tracker),
-        ...createSessionTools(config.codebasePath),
-    };
-
-    let lastResponse = "";
-    for (const step of selected) {
-        console.log(chalk.bold(`\nStep: ${step.title}\n`));
-
-        const agent = new ToolLoopAgent({
-            model: await getAgentModel(),
-            stopWhen: stepCountIs(50),
-            tools,
-        });
-
-        while (true) {
-            try {
-                const r = await withSpinner(
-                    {
-                        message: `Executing: ${step.title}`,
-                        doneMessage: "done",
-                        failMessage: "failed",
-                    },
-                    (ctx) => streamAgentCall(agent, stepPrompt(plan.goal, step), ctx),
-                );
-
-                if (r.trim()) {
-                    console.log(renderTerminalMarkdown(r));
-                    lastResponse = r.trim();
-                }
-                break;
-            } catch (error) {
-                logAndContinue("plan", error, {
-                    phase: "execute-step",
-                    stepTitle: step.title,
-                    sessionId: sessionEntry.id,
-                });
-                const retry = await promptToRetryAiCall(
-                    `Step "${step.title}" hit a provider error.`,
-                    error,
-                );
-                if (retry) continue;
-                markSessionInterrupted(sessionEntry.id);
-                await endSession(
-                    sessionEntry.id,
-                    tracker,
-                    `Stopped during step: ${step.title}`,
-                );
-                executor.discardChanges();
-                return;
-            }
-        }
+    // Render markdown text response to the console before running the approval flow
+    if (resultText.trim()) {
+        console.log(renderTerminalMarkdown(resultText));
     }
 
     const ok = await runApprovalFlow(tracker);
-
     if (!ok) {
-        await endSession(
-            sessionEntry.id,
-            tracker,
-            lastResponse || "Plan execution cancelled",
-        );
+        await endSession(sessionEntry.id, tracker, resultText || "(no response)");
         executor.discardChanges();
         return;
     }
@@ -304,24 +305,22 @@ export async function runPlanMode(preCapturedGoal?: string): Promise<void> {
         async () => {
             const { errors } = executor.applyApprovedFromTracker();
             if (errors.length) {
-                logAndContinue("plan", new Error("Some apply operations failed"), {
+                logAndContinue("agent", new Error("Some apply operations failed"), {
                     phase: "apply-changes",
                     sessionId: sessionEntry.id,
                     errorCount: errors.length,
                     errors,
                 });
                 console.log(chalk.red("\nSome operations reported errors:\n"));
-                for (const e of errors) console.log(chalk.red(`  - ${e}`));
+                for (const e of errors) {
+                    console.log(chalk.red(`   - ${e}`));
+                }
             } else {
                 console.log(chalk.green("\nApplied.\n"));
             }
         },
     );
 
-    await endSession(
-        sessionEntry.id,
-        tracker,
-        lastResponse || "Plan executed with " + selected.length + " step(s).",
-    );
+    await endSession(sessionEntry.id, tracker, resultText || "(no response)");
     executor.discardChanges();
 }

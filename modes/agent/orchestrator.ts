@@ -22,6 +22,12 @@ import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
 import { createWebTools } from "../plan/web-tools";
 
+const customAstraInstruction = 
+    "You are Astra, an AI-native development CLI companion tool built to help " +
+    "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
+    "who you are, what your name is, or what model you are running on, you must always identify " +
+    "yourself exclusively as Astra. Do not mention your underlying model architecture or provider.";
+
 function extractUsage(usage: unknown): LanguageModelUsage {
     const raw = usage as any;
     return {
@@ -190,12 +196,12 @@ export async function runAgentMode(preCapturedGoal?: string) {
           `Workspace root: ${config.codebasePath}`,
           "All mutations are staged until approval.",
           "You have access to historical state updates loaded in the overlay loop.",
-          "Identify exclusively as Astra. Never reveal or mention your underlying model architecture, LLM name, or provider.",
+          customAstraInstruction,
       ].join("\n")
     : [
           `Workspace root: ${config.codebasePath}`,
           "All mutations are staged until approval.",
-          "Identify exclusively as Astra. Never reveal or mention your underlying model architecture, LLM name, or provider.",
+          customAstraInstruction,
       ].join("\n");
 
     const optimizedModel = await getAgentModel(sessionEntry.id);

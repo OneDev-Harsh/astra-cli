@@ -2,7 +2,7 @@ import z from "zod";
 import chalk from "chalk";
 import { confirm, isCancel, text } from "@clack/prompts";
 import { ToolLoopAgent, stepCountIs } from "ai";
-import { getAgentModel } from "../../ai/ai.config";
+import { getAgentModel, withAiRetry, getRetryConfig } from "../../ai";
 import { ActionTracker } from "../agent/action-tracker";
 import { ToolExecutor } from "../agent/tool-executor";
 import { createAgentTools } from "../agent/agent-tools";
@@ -12,10 +12,22 @@ import { renderTerminalMarkdown } from "../../tui/terminal-md";
 import { createWebTools } from "../plan/web-tools";
 import { withSpinner } from "../../tui/spinner";
 import type { SpinnerContext, LanguageModelUsage } from "../../tui/spinner";
-import { beginSession, endSession, markSessionInterrupted } from "../../session";
+import { 
+    beginSession, 
+    endSession, 
+    markSessionInterrupted,
+    readSessionActions 
+} from "../../session";
 import { createSessionTools } from "../../session/session-tools";
 import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
+
+// Shared Persona Instruction
+const customAstraInstruction = 
+    "You are Astra, an AI-native development CLI companion tool built to help " +
+    "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
+    "who you are, what your name is, or what model you are running on, you must always identify " +
+    "yourself exclusively as Astra. Do not mention your underlying model architecture or provider.";
 
 function createReadOnlyTools(executor: ToolExecutor) {
     const all = createAgentTools(executor);
@@ -43,23 +55,6 @@ function asMd(questions: string, answer: string): string {
     return `## Question\n\n${questions.trim()}\n\n## Answer\n\n${answer.trim()}\n`;
 }
 
-/**
- * Exponential backoff with jitter.
- * Base 1s, max 30s: 1s → 2s → 4s → 8s → 16s → 30s (capped)
- */
-async function backoffDelay(attemptNumber: number): Promise<void> {
-    const baseDelayMs = 1000;
-    const maxDelayMs = 30000;
-    const jitterMs = Math.random() * 500; // ±0ms to 500ms
-    const delayMs = Math.min(maxDelayMs, (1 << attemptNumber) * baseDelayMs + jitterMs);
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-}
-
-/**
- * Safely extract token counts from an AI SDK usage object.
- * Handles both v3 (`promptTokens`/`completionTokens`) and v4
- * (`inputTokens`/`outputTokens`) schema shapes.
- */
 function extractUsage(usage: unknown): LanguageModelUsage {
     const raw = usage as any;
     return {
@@ -70,39 +65,26 @@ function extractUsage(usage: unknown): LanguageModelUsage {
     };
 }
 
-/**
- * Helper to generate descriptive text depending on the tool executed and its parameters.
- */
 function getToolDetailsString(toolName: string, input: any): string {
     if (!input || typeof input !== "object") return "";
-
     const targetPath = input.path ?? input.filePath ?? input.filename ?? input.dirPath ?? input.folderPath;
 
     switch (toolName) {
-        case "read_file":
-            return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
-        case "create_file":
-            return targetPath ? `creating ${chalk.green(targetPath)}` : "";
+        case "read_file": return targetPath ? `reading ${chalk.yellow(targetPath)}` : "";
+        case "create_file": return targetPath ? `creating ${chalk.green(targetPath)}` : "";
         case "modify_file":
         case "replace_in_file":
         case "append_to_file":
-        case "insert_at_line":
-            return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
-        case "delete_file":
-            return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
-        case "create_folder":
-            return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
+        case "insert_at_line": return targetPath ? `modifying ${chalk.yellow(targetPath)}` : "";
+        case "delete_file": return targetPath ? `deleting ${chalk.red(targetPath)}` : "";
+        case "create_folder": return targetPath ? `creating directory ${chalk.green(targetPath)}` : "";
         case "run_command":
         case "run_background_command":
-        case "execute_shell":
-            return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
-        case "run_test_file":
-            return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
+        case "execute_shell": return input.command ? `running ${chalk.magenta(`"${input.command}"`)}` : "";
+        case "run_test_file": return targetPath ? `testing ${chalk.cyan(targetPath)}` : "";
         case "session_search":
-        case "web_search":
-            return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
-        case "fetch_url":
-            return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+        case "web_search": return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
+        case "fetch_url": return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
         default:
             if (targetPath) return `target: ${targetPath}`;
             if (input.query) return `query: "${input.query}"`;
@@ -111,8 +93,70 @@ function getToolDetailsString(toolName: string, input: any): string {
     }
 }
 
+function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp: number }) {
+    return ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
+        const now = Date.now();
+        const stepDurationMs = now - state.lastStepTimestamp;
+        state.lastStepTimestamp = now; 
+
+        const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
+        const stepMetrics = extractUsage(usage);
+        const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
+        const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
+
+        if (toolCalls && toolCalls.length > 0) {
+            for (const tool of toolCalls) {
+                const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
+                const separator = detailedInfo ? " — " : "";
+
+                ctx.logStep(
+                    `  ${chalk.blue("➔")} ${chalk.dim("Executed:")} ` +
+                    `${chalk.cyan.bold(tool.toolName)}` +
+                    `${separator}${detailedInfo} ` +
+                    `${chalk.gray(`(${elapsedSeconds}s · ↑${inT} ↓${outT} tokens)`)}`
+                );
+            }
+        }
+
+        if (usage) {
+            ctx.updateTokens(stepMetrics);
+        }
+    };
+}
+
+async function streamAgentCall(
+    agent: any,
+    prompt: string,
+    ctx: SpinnerContext,
+): Promise<string> {
+    const stepTimingState = { lastStepTimestamp: Date.now() };
+
+    const streamResult = await agent.stream({
+        prompt,
+        onStepFinish: createStepFinishHandler(ctx, stepTimingState),
+    });
+
+    let accumulated = "";
+
+    for await (const chunk of streamResult.textStream) {
+        accumulated += chunk;
+        ctx.writeStreamChunk(chunk);
+    }
+
+    if (accumulated.trim()) {
+        ctx.logStep(""); 
+    }
+
+    return accumulated;
+}
+
+/* ==========================================
+   ASK MODE ORCHESTRATOR
+   ========================================== */
 export async function runAskMode(preCapturedGoal?: string) {
-    console.log(chalk.bold("\nAsk Mode\n"));
+    console.log(chalk.bold("\n   Ask mode\n"));
+
+    const preloadedModelPromise = getAgentModel();
 
     const goal = preCapturedGoal ?? await text({
         message: "What would you like the agent to do for you?",
@@ -120,6 +164,8 @@ export async function runAskMode(preCapturedGoal?: string) {
     });
 
     if (isCancel(goal) || !goal.trim()) return;
+
+    await preloadedModelPromise;
 
     const config = defaultAgentConfig();
     config.tools.allowShellExecution = false;
@@ -136,139 +182,95 @@ export async function runAskMode(preCapturedGoal?: string) {
         goal: goal.trim(),
     });
 
-    const agent: any = new ToolLoopAgent({
-        model: await getAgentModel(),
+    const tools = {
+        ...createReadOnlyTools(executor),
+        ...createWebTools(tracker),
+        ...createSessionTools(config.codebasePath),
+    };
+
+    const instructions = [
+        `Workspace root: ${config.codebasePath}`,
+        "You are operating in a READ-ONLY context. File changes, tool installations, or command executions are disabled.",
+        customAstraInstruction,
+    ].join("\n");
+
+    const optimizedModel = await getAgentModel(sessionEntry.id);
+
+    const agent = new ToolLoopAgent({
+        model: optimizedModel,
         stopWhen: stepCountIs(25),
-        tools: {
-            ...createReadOnlyTools(executor),
-            ...createWebTools(tracker),
-            ...createSessionTools(config.codebasePath),
-        },
+        instructions,
+        tools,
     });
 
-    const systemDirective =
-        "You are Astra, an AI-native development CLI companion tool built to help " +
-        "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
-        "who you are, what your name is, or what model you are running on, you must always identify " +
-        "yourself exclusively as Astra. Do not mention your underlying model architecture or provider.";
-
-    const combinedPrompt = `${systemDirective}\n\nUser Question: ${goal.trim()}`;
-
-    const MAX_RETRIES = 5;
     let resultText = "";
-    let attemptCount = 0;
+    const retryConfig = getRetryConfig();
 
-    while (attemptCount < MAX_RETRIES) {
-        try {
-            resultText = await withSpinner(
-                {
-                    message: "Thinking...",
-                    doneMessage: "here's the answer",
-                    failMessage: "couldn't get an answer",
-                },
-                async (ctx) => {
-                    // Track runtime baseline for individual step timings
-                    let lastStepTimestamp = Date.now();
+    try {
+        resultText = await withAiRetry(
+            () =>
+                withSpinner(
+                    {
+                        message: "Thinking...",
+                        doneMessage: "here's the answer",
+                        failMessage: "couldn't get an answer",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
+                ),
+            "The ask agent hit a provider error.",
+            {
+                enabled: retryConfig.enabled,
+                retryConfig: {
+                    maxRetries: retryConfig.maxRetries,
+                    baseDelayMs: 1000,
+                    maxDelayMs: 30000,
+                    backoffMultiplier: 2,
+                    jitter: true,
+                    maxJitterMs: 1000,
+                    version: 1,
+                } as any,
+                showProgress: retryConfig.showProgress,
+                askBeforeRetry: false,
+            },
+        );
+    } catch (error) {
+        logAndContinue("ask", error, {
+            phase: "primary-run",
+            sessionId: sessionEntry.id,
+            goal: goal.trim(),
+        });
 
-                    const streamResult = await agent.stream({
-                        prompt: combinedPrompt,
-                        onStepFinish: ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
-                            const now = Date.now();
-                            const stepDurationMs = now - lastStepTimestamp;
-                            // Reset the mark for the following step loop
-                            lastStepTimestamp = now;
+        const manualRetry = await promptToRetryAiCall(
+            "Automatic retries exhausted. Would you like to try once more?",
+            error,
+        );
 
-                            const elapsedSeconds = (stepDurationMs / 1000).toFixed(1);
-
-                            // Extract token telemetry
-                            const stepMetrics = extractUsage(usage);
-                            const inT = stepMetrics.inputTokens ?? stepMetrics.promptTokens ?? 0;
-                            const outT = stepMetrics.outputTokens ?? stepMetrics.completionTokens ?? 0;
-
-                            if (usage) {
-                                ctx.updateTokens(stepMetrics);
-                            }
-
-                            // Output unique logging details for tool transactions
-                            if (toolCalls && toolCalls.length > 0) {
-                                for (const tool of toolCalls) {
-                                    const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
-                                    const separator = detailedInfo ? " — " : "";
-
-                                    ctx.logStep(
-                                        `  ${chalk.blue("➔")} ${chalk.dim("Executed:")} ` +
-                                        `${chalk.cyan.bold(tool.toolName)}` +
-                                        `${separator}${detailedInfo} ` +
-                                        `${chalk.gray(`(${elapsedSeconds}s · ↑${inT} ↓${outT} tokens)`)}`
-                                    );
-                                }
-                            }
-                        },
-                    });
-
-                    let accumulated = "";
-                    let firstChunk = true;
-
-                    for await (const chunk of streamResult.textStream) {
-                        if (firstChunk) {
-                            ctx.updateMessage("Thinking...");
-                            firstChunk = false;
-                        }
-                        accumulated += chunk;
-                        ctx.incrementOutputChunk();
-                    }
-
-                    return accumulated;
-                },
-            );
-            break;
-        } catch (error) {
-            attemptCount++;
-            logAndContinue("ask", error, {
-                attempt: attemptCount,
-                maxRetries: MAX_RETRIES,
-                sessionId: sessionEntry.id,
-                goal: goal.trim(),
-            });
-
-            const attemptsRemaining = MAX_RETRIES - attemptCount;
-
-            if (attemptsRemaining <= 0) {
-                console.log(
-                    chalk.red(`\n✗ AI provider error after ${MAX_RETRIES} attempts. Giving up.\n`)
+        if (manualRetry) {
+            try {
+                resultText = await withSpinner(
+                    {
+                        message: "Thinking...",
+                        doneMessage: "here's the answer",
+                        failMessage: "couldn't get an answer",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
                 );
+            } catch (finalError) {
+                logAndContinue("ask", finalError, {
+                    phase: "manual-retry",
+                    sessionId: sessionEntry.id,
+                    goal: goal.trim(),
+                });
                 markSessionInterrupted(sessionEntry.id);
-                await endSession(
-                    sessionEntry.id,
-                    tracker,
-                    `Provider error after ${MAX_RETRIES} retries.`,
-                );
+                await endSession(sessionEntry.id, tracker, "Stopped after final manual retry failed.");
                 executor.discardChanges();
                 return;
             }
-
-            const retry = await promptToRetryAiCall(
-                `The answer request hit a provider error (attempt ${attemptCount}/${MAX_RETRIES}).`,
-                error,
-            );
-
-            if (!retry) {
-                markSessionInterrupted(sessionEntry.id);
-                await endSession(
-                    sessionEntry.id,
-                    tracker,
-                    "User cancelled after provider error.",
-                );
-                executor.discardChanges();
-                return;
-            }
-
-            console.log(
-                chalk.dim(
-                    `  Waiting before retry ${attemptCount + 1}/${MAX_RETRIES}...`
-                )
-            );
-            await backoffDelay(attemptCount - 1);
+        } else {
+            markSessionInterrupted(sessionEntry.id);
+            await endSession(sessionEntry.id, tracker, "Stopped after AI provider error (all retries exhausted).");
+            executor.discardChanges();
+            return;
         }
     }
 
@@ -326,5 +328,205 @@ export async function runAskMode(preCapturedGoal?: string) {
     );
 
     await endSession(sessionEntry.id, tracker, answer);
+    executor.discardChanges();
+}
+
+/* ==========================================
+   AGENT MODE ORCHESTRATOR
+   ========================================== */
+export async function runAgentMode(preCapturedGoal?: string) {
+    console.log(chalk.bold("\n   Agent mode\n"));
+
+    const preloadedModelPromise = getAgentModel();
+
+    const goal = preCapturedGoal ?? await text({
+        message: "What would you like the agent to do for you?",
+        placeholder: "Concrete task for this codebase...",
+    });
+
+    if (isCancel(goal) || !goal.trim()) return;
+
+    await preloadedModelPromise;
+
+    const config = defaultAgentConfig();
+    const tracker = new ActionTracker();
+    const executor = new ToolExecutor(tracker, config);
+
+    const approveCreatedFile = async (filePath: string): Promise<string> => {
+        const ok = await runApprovalFlow(tracker, {
+            paths: [filePath],
+            skipBatchPrompt: true,
+        });
+
+        if (!ok) {
+            executor.discardStagedPath(filePath);
+            return `User rejected creating ${filePath}. Do not modify or rely on this file unless you recreate it later.`;
+        }
+
+        const { errors } = executor.applyApprovedFromTracker();
+        if (errors.length) {
+            executor.discardStagedPath(filePath);
+            logAndContinue("agent", new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`), {
+                filePath,
+                errorCount: errors.length,
+                errors,
+            });
+            throw new Error(`Failed to apply approved file ${filePath}: ${errors.join("; ")}`);
+        }
+
+        return `Created and applied ${filePath} after user approval.`;
+    };
+
+    const resumeId = (globalThis as any).__ASTRA_RESUME_SESSION__ as string | undefined;
+    if (resumeId) delete (globalThis as any).__ASTRA_RESUME_SESSION__;
+
+    const { entry: sessionEntry, contextSummary } = beginSession({
+        workspacePath: config.codebasePath,
+        mode: "agent",
+        goal: goal.trim(),
+        resumeSessionId: resumeId,
+    });
+
+    if (resumeId) {
+        console.log(chalk.dim("\n   Resuming previous session transaction history...\n"));
+        const historicActions = readSessionActions(resumeId);
+        if (historicActions.length > 0) {
+            executor.hydrateFromActions(historicActions);
+        }
+    }
+
+    const tools = {
+        ...createAgentTools(executor, { afterCreateFile: approveCreatedFile }),
+        ...createSessionTools(config.codebasePath),
+        ...createWebTools(tracker),
+    };
+
+    const instructions = contextSummary
+    ? [
+          contextSummary,
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          "You have access to historical state updates loaded in the overlay loop.",
+          customAstraInstruction,
+      ].join("\n")
+    : [
+          `Workspace root: ${config.codebasePath}`,
+          "All mutations are staged until approval.",
+          customAstraInstruction,
+      ].join("\n");
+
+    const optimizedModel = await getAgentModel(sessionEntry.id);
+
+    const agent = new ToolLoopAgent({
+        model: optimizedModel,
+        stopWhen: stepCountIs(50),
+        instructions,
+        tools,
+    });
+
+    let resultText = "";
+    const retryConfig = getRetryConfig();
+
+    try {
+        resultText = await withAiRetry(
+            () =>
+                withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
+                ),
+            "The agent hit a provider error.",
+            {
+                enabled: retryConfig.enabled,
+                retryConfig: {
+                    maxRetries: retryConfig.maxRetries,
+                    baseDelayMs: 1000,
+                    maxDelayMs: 30000,
+                    backoffMultiplier: 2,
+                    jitter: true,
+                    maxJitterMs: 1000,
+                    version: 1,
+                } as any,
+                showProgress: retryConfig.showProgress,
+                askBeforeRetry: false,
+            },
+        );
+    } catch (error) {
+        logAndContinue("agent", error, {
+            phase: "primary-run",
+            sessionId: sessionEntry.id,
+            goal: goal.trim(),
+        });
+
+        const manualRetry = await promptToRetryAiCall(
+            "Automatic retries exhausted. Would you like to try once more?",
+            error,
+        );
+
+        if (manualRetry) {
+            try {
+                resultText = await withSpinner(
+                    {
+                        message: "Agent is working on your task...",
+                        doneMessage: "done",
+                        failMessage: "something went wrong",
+                    },
+                    (ctx) => streamAgentCall(agent, goal.trim(), ctx),
+                );
+            } catch (finalError) {
+                logAndContinue("agent", finalError, {
+                    phase: "manual-retry",
+                    sessionId: sessionEntry.id,
+                    goal: goal.trim(),
+                });
+                markSessionInterrupted(sessionEntry.id);
+                await endSession(sessionEntry.id, tracker, "Stopped after final manual retry failed.");
+                executor.discardChanges();
+                return;
+            }
+        } else {
+            markSessionInterrupted(sessionEntry.id);
+            await endSession(sessionEntry.id, tracker, "Stopped after AI provider error (all retries exhausted).");
+            executor.discardChanges();
+            return;
+        }
+    }
+
+    const ok = await runApprovalFlow(tracker);
+    if (!ok) {
+        await endSession(sessionEntry.id, tracker, resultText || "(no response)");
+        executor.discardChanges();
+        return;
+    }
+
+    await withSpinner(
+        {
+            message: "Applying approved changes...",
+            doneMessage: "all changes applied",
+            failMessage: "some operations failed",
+        },
+        async () => {
+            const { errors } = executor.applyApprovedFromTracker();
+            if (errors.length) {
+                logAndContinue("agent", new Error("Some apply operations failed"), {
+                    phase: "apply-changes",
+                    sessionId: sessionEntry.id,
+                    errorCount: errors.length,
+                    errors,
+                });
+                console.log(chalk.red("\nSome operations reported errors:\n"));
+                for (const e of errors) {
+                    console.log(chalk.red(`   - ${e}`));
+                }
+            } else {
+                console.log(chalk.green("\nApplied.\n"));
+            }
+        },
+    );
+
+    await endSession(sessionEntry.id, tracker, resultText || "(no response)");
     executor.discardChanges();
 }
