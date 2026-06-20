@@ -14,6 +14,7 @@ import {
 } from "./store";
 import { captureSessionContext, buildContextSummary } from "./session-context";
 import { ActionHistoryManager } from "./action-history";
+import { ProjectContextLoader } from "./project-context";
 
 const C = {
   primary: chalk.hex("#a78bfa"),
@@ -44,6 +45,16 @@ export interface BeginSessionResult {
  *  2. `autoResume: true` + an interrupted session exists in this workspace → resume it.
  *  3. `autoResume: true` + the most recent session is "related" to the new goal → resume it.
  *  4. Otherwise → create a fresh session.
+ */
+/**
+ * Start a new session or resume an existing one.
+ *
+ * Resume logic (in priority order):
+ * 1. Explicit `resumeSessionId` supplied → resume that session.
+ * 2. `autoResume: true` + an interrupted session exists in this workspace → resume it.
+ * 3. `autoResume: true` + the most recent session is "related" to the new goal → resume it.
+ * 4. Otherwise → create a fresh session.
+ * * Auto-injects local project configuration memory rules via ASTRA.md if present.
  */
 export function beginSession(opts: {
   workspacePath: string;
@@ -82,7 +93,15 @@ export function beginSession(opts: {
     mode: opts.mode,
     goal: opts.goal,
   });
-  return { entry, contextSummary: null, autoResumed: false };
+
+  // Automatically parse and inject project rules for new runs
+  let contextSummary: string | null = null;
+  const localMemory = ProjectContextLoader.findAndReadContext(opts.workspacePath);
+  if (localMemory) {
+    contextSummary = ProjectContextLoader.injectContextBlock(localMemory);
+  }
+
+  return { entry, contextSummary, autoResumed: false };
 }
 
 /**
@@ -261,13 +280,29 @@ function resumeSession(
       mode: opts.mode,
       goal: opts.goal,
     });
-    return { entry, contextSummary: null, autoResumed: false };
+    
+    let contextSummary: string | null = null;
+    const localMemory = ProjectContextLoader.findAndReadContext(opts.workspacePath);
+    if (localMemory) {
+      contextSummary = ProjectContextLoader.injectContextBlock(localMemory);
+    }
+    return { entry, contextSummary, autoResumed: false };
   }
 
   // Mark old session as completed before chaining
   updateSession(prev.id, { status: "completed" });
 
-  const contextSummary = buildContextSummary(prev, { transcriptTurns: 12 });
+  // Get rolling historical transcript window context summary
+  let contextSummary = buildContextSummary(prev, { transcriptTurns: 12 }) || "";
+
+  // Locate and prepend ASTRA.md project memory guidelines directly above historical transcript items
+  const localMemory = ProjectContextLoader.findAndReadContext(opts.workspacePath);
+  if (localMemory) {
+    const formattedBlock = ProjectContextLoader.injectContextBlock(localMemory);
+    contextSummary = contextSummary 
+      ? formattedBlock + "\n" + contextSummary 
+      : formattedBlock;
+  }
 
   const entry = createSession({
     workspacePath: opts.workspacePath,
@@ -286,7 +321,7 @@ function resumeSession(
 
   return {
     entry,
-    contextSummary,
+    contextSummary: contextSummary || null,
     autoResumed,
     resumedFrom: prev,
   };

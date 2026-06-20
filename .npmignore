@@ -3,3 +3,4 @@ tests/
 sandbox_home/
 .gitignore
 private
+PROJECT_CONTEXT.md
