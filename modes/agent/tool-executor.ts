@@ -4,6 +4,8 @@ import { homedir } from "os";
 import { spawnSync, spawn } from "child_process";
 import type { AgentConfig, ActionLog } from "./types";
 import { ActionTracker } from "./action-tracker";
+import { ActionHistoryManager } from "../../session/action-history";
+import { getMostRecentSession } from "../../session/store";
 
 const TEXT_EXT = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".mdx",
@@ -868,18 +870,22 @@ export class ToolExecutor {
   applyApprovedFromTracker(): { errors: string[] } {
     const errors: string[] = [];
     const all = [...this.tracker.getActions()];
+    const successfullyAppliedActions: any[] = []; 
 
+    // --- 1. Folder Ops ---
     for (const a of all.filter(
       (x) => x.type === "folder_create" && x.status === "approved" && !this.appliedActionIds.has(x.id)
     )) {
       try {
         fs.mkdirSync(this.resolveSafe(a.path), { recursive: true });
         this.appliedActionIds.add(a.id);
+        successfullyAppliedActions.push(a);
       } catch (e) {
         errors.push(String(e));
       }
     }
 
+    // --- 2. File Ops ---
     const fileOps = all
       .filter(
         (a) =>
@@ -901,18 +907,24 @@ export class ToolExecutor {
       const a = ops[ops.length - 1];
       if (!a) continue;
       try {
-        if (a.type === "file_delete") fs.rmSync(this.resolveSafe(p), { force: true });
-        else {
+        if (a.type === "file_delete") {
+          fs.rmSync(this.resolveSafe(p), { force: true });
+        } else {
           const target = this.resolveSafe(p);
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, a.details.after ?? "", "utf8");
         }
-        for (const op of ops) this.appliedActionIds.add(op.id);
+        
+        for (const op of ops) {
+          this.appliedActionIds.add(op.id);
+          successfullyAppliedActions.push(op);
+        }
       } catch (e) {
         errors.push(String(e));
       }
     }
 
+    // --- 3. Shell / Tool Execution Ops ---
     for (const a of all.filter(
       (x) => x.type === "tool_execute" && x.status === "approved" && !this.appliedActionIds.has(x.id)
     )) {
@@ -926,11 +938,14 @@ export class ToolExecutor {
           maxBuffer: 16 * 1024 * 1024,
           timeout: 300000,
         });
+        
         if (r.error && (r.error as any).code === "ETIMEDOUT") {
           errors.push(`Command timed out after 5 minutes of inactivity: "${cmd}"`);
           this.appliedActionIds.add(a.id);
+          successfullyAppliedActions.push(a);
           continue;
         }
+
         const MAX_OUTPUT_LENGTH = 15000;
         let cleanStdout = r.stdout || "";
         let cleanStderr = r.stderr || "";
@@ -943,11 +958,33 @@ export class ToolExecutor {
         if (r.status !== 0) {
           errors.push(`Command "${cmd}" exited with code ${r.status}. Error: ${cleanStderr}`);
         }
+        
         this.appliedActionIds.add(a.id);
+        successfullyAppliedActions.push(a);
       } catch (spawnError) {
         errors.push(`Execution error spawning command "${cmd}": ${(spawnError as Error).message}`);
         this.appliedActionIds.add(a.id);
+        successfullyAppliedActions.push(a);
       }
+    }
+
+    // --- 4. Stream to historical log using decoupled/implicit properties ---
+    if (successfullyAppliedActions.length > 0) {
+      // Resolve workspace implicitly from current execution configurations
+      const workspacePath = this.config.codebasePath || process.cwd();
+      
+      // Resolve sessionId dynamically so other invocation places don't break
+      let sessionId = "standalone_execution";
+      try {
+        const activeSession = getMostRecentSession();
+        if (activeSession) {
+          sessionId = activeSession.id;
+        }
+      } catch {
+        // Fallback safely if store/session managers are completely unitialized
+      }
+
+      ActionHistoryManager.recordGlobalActions(sessionId, workspacePath, successfullyAppliedActions);
     }
 
     return { errors };

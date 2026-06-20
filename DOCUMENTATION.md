@@ -1,6 +1,6 @@
 # Astra CLI — Complete Technical Documentation
 
-> **Version:** 0.1.5
+> **Version:** 0.1.6
 > **Runtime:** Bun (>=1.0.0)
 > **License:** MIT
 > **Package name:** `astrabot`
@@ -75,6 +75,7 @@ A standalone **arcade** with 5 mini-games (HTML canvas) is also included.
 - **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed server communication
 - **Cross-platform installers** — automated setup scripts for Linux/macOS and Windows
 - **Centralised error logging** — rotating log file at `~/.astra/logs/astra.log` with ring buffer for post-mortem debugging
+- **Persistent action history** *(upcoming v0.1.7)* — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps; queryable across sessions via `ActionHistoryManager`
 
 ---
 
@@ -167,6 +168,7 @@ Astra is configured entirely through environment variables, loaded from `~/.astr
 | `~/.astra/sessions/<session-id>.json` | Individual session action logs |
 | `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
 | `~/.astra/logs/astra.log` | Rotating error log file (5 MiB max, 3 backups) |
+| `~/.astra/history/actions.jsonl` | Persistent action history log (JSONL, all approved actions across sessions) |
 
 ### Setup Wizard (`astra setup`)
 
@@ -759,7 +761,8 @@ astrabot/
 │   ├── session-manager.ts          # Lifecycle & auto-resume
 │   ├── session-context.ts          # Context summary for resumption
 │   ├── session-tools.ts            # session_status, search, resume
-│   └── session-cache.ts            # In-memory cache (debounced writes)
+│   ├── session-cache.ts            # In-memory cache (debounced writes)
+│   └── action-history.ts           # Persistent cross-session action log (v0.1.7)
 │
 ├── .skills/                        # Built-in skills
 │   ├── code-review/SKILL.md
@@ -838,6 +841,7 @@ astrabot/
 - [x] ~~Skills system~~ — 5 built-in skills
 - [x] ~~Centralised error logger~~ — implemented with rotating file output
 - [x] ~~Sandbox remote server~~ — migrated in v0.1.5
+- [x] ~~Persistent action history~~ — cross-session JSONL action log, implemented in v0.1.6
 - [ ] Telegram mode
 - [ ] Undo/redo support via action log replay
 - [ ] Configurable tool allowlists per mode

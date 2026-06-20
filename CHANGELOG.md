@@ -8,6 +8,40 @@ The format is based on [Keep a Changelog](https://keepacontain.com/en/1.1.0/), a
 
 ## [Unreleased]
 
+## [0.1.7] — Unreleased
+
+### Added
+
+- **Persistent action history** — New `ActionHistoryManager` in `session/action-history.ts` that logs all approved/applied actions to a persistent global JSONL file at `~/.astra/history/actions.jsonl`. Each entry includes a UUID, session ID, workspace path, timestamp, and the full `ActionLog` record.
+- **Cross-session action queries** — `ActionHistoryManager` exposes `getGlobalHistory(limit)` to retrieve recent actions across all sessions (newest first) and `searchHistoryByFile(targetPath)` to find all historical actions targeting a specific file path.
+- **Automatic history sync on session end** — `endSession()` and `endMultiSession()` in `session/session-manager.ts` now automatically sync approved actions to the global history log upon completion.
+- **Automatic history sync on apply** — `applyApprovedFromTracker()` in `modes/agent/tool-executor.ts` now records successfully applied actions to the global history in real-time, with graceful fallback when no session store is available.
+
+### Changed
+
+- **`applyApprovedFromTracker()` refactored** — Internal restructuring with clearly commented sections (folder ops, file ops, shell/tool ops) and a `successfullyAppliedActions` accumulator that feeds the history log after all operations complete.
+- **`endMultiSession()` cleaned up** — Removed stale comment block, extracted `multiAgentApprovedActions` filter for clarity.
+
+---
+
+## [0.1.6] — 2026-07-04
+
+### Added
+
+- **Streaming output for Agent, Ask, and Plan modes** — All three modes now use `agent.stream()` with real-time text chunk display via a new `streamAgentCall()` helper. Chunks are rendered incrementally to the terminal using `ctx.writeStreamChunk()`, providing a responsive, no-wait output experience.
+- **OpenRouter prompt caching** — `getAgentModel()` in `ai/ai.config.ts` now accepts an optional `sessionId` parameter and passes `X-OpenRouter-Cache: true` and `session_id` headers to the OpenRouter provider, enabling edge-cache hits and sticky-session prefix caching for improved latency on repeated prompts.
+- **Session-aware model cache** — The model cache in `ai/ai.config.ts` now includes `sessionId` as part of the cache key, so models with different session contexts are correctly invalidated and reused.
+- **Neon Memory & Neon Tetris** — Two new arcade games added to the `astra play` game selector, bringing the total to 5 mini-games.
+
+### Changed
+
+- **`getAgentModel()` signature updated** — Now accepts `sessionId?: string` to support prompt caching and sticky session routing. Cache invalidation logic updated accordingly.
+- **Agent orchestrator streaming** — `modes/agent/orchestrator.ts` now uses `streamAgentCall()` with `onStepFinish` handler that logs tool calls with per-step duration and token counts.
+- **Ask mode rewritten for streaming** — `modes/ask/orchestrator.ts` fully restructured to use `agent.stream()` with real-time chunk display and live token telemetry.
+- **Plan mode rewritten for streaming** — `modes/plan/orchestrator.ts` fully restructured to use `agent.stream()` with real-time chunk display and live token telemetry.
+
+---
+
 - Nothing yet.
 
 ---

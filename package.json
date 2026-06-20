@@ -1,6 +1,6 @@
 {
   "name": "astrabot",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "AI-native development companion — Agent, Ask, Plan, Auto, and Multi-Agent modes in your terminal.",
   "module": "index.ts",
   "type": "module",

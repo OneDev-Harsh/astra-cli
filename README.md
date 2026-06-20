@@ -67,6 +67,8 @@ Built on [Bun](https://bun.sh), powered by [OpenRouter](https://openrouter.ai), 
 - **Rich terminal UI** — interactive prompts, markdown rendering, animated ASCII banner, colored logging
 - **Cross-platform installers** — automated setup for Linux/macOS and Windows
 - **Arcade** — 5 mini-games served via Bun's native HTTP server (easter egg)
+- **Streaming output** — Agent, Ask, and Plan modes use `agent.stream()` with real-time chunk display, live token telemetry, and OpenRouter prompt caching with sticky session routing
+- **Persistent action history** *(upcoming v0.1.7)* — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps; queryable across sessions via `ActionHistoryManager`
 
 ---
 
@@ -118,8 +120,8 @@ npx astrabot "explain how this works"
 ### Option 4: Install from Source
 
 ```bash
-git clone https://github.com/<your-username>/astrabot.git
-cd astrabot
+git clone https://github.com/OneDev-Harsh/astra-cli.git
+cd astra-cli
 bun install
 bun run index.ts setup
 ```
@@ -183,6 +185,7 @@ Astra is configured through environment variables loaded from `~/.astra/.env`.
 | `~/.astra/sessions/<session-id>.json` | Individual session action logs |
 | `~/.astra/.secure/sandbox.enc` | Encrypted sandbox credentials (if OS keychain unavailable) |
 | `~/.astra/logs/astra.log` | Rotating error log file (5 MiB max, 3 backups) |
+| `~/.astra/history/actions.jsonl` | Persistent action history log (JSONL, all approved actions across sessions) |
 
 ### Setup Wizard
 
@@ -597,11 +600,11 @@ astrabot/
 - [x] Skills system (5 built-in skills)
 - [x] Centralised error logger
 - [x] Sandbox remote server migration
+- [x] Persistent action history (cross-session JSONL log)
 - [ ] Telegram mode
 - [ ] Undo/redo support via action log replay
 - [ ] Configurable tool allowlists per mode
 - [ ] Per-mode model selection
-- [ ] Persistent action history across sessions
 
 ---
 

@@ -13,6 +13,7 @@ import {
   appendTranscript,
 } from "./store";
 import { captureSessionContext, buildContextSummary } from "./session-context";
+import { ActionHistoryManager } from "./action-history";
 
 const C = {
   primary: chalk.hex("#a78bfa"),
@@ -129,10 +130,17 @@ export async function endSession(
         )
     ),
   ];
-  const appliedActions = actions.filter((a) => a.status === "approved").length;
+  const approvedActionsList = actions.filter((a) => a.status === "approved");
+  const appliedActions = approvedActionsList.length;
   const rejectedActions = actions.filter((a) => a.status === "rejected").length;
 
   const summary = await summariseSession(actions, agentResponse);
+
+  // Sync to historical log upon runtime compilation/exit
+  if (approvedActionsList.length > 0) {
+    // Fallback context: paths will be parsed natively inside history log tracking
+    await ActionHistoryManager.recordGlobalActions(sessionId, process.cwd(), approvedActionsList);
+  }
 
   updateSession(
     sessionId,
@@ -149,9 +157,7 @@ export async function endSession(
   );
 }
 
-/**
- * End a multi-agent session from multiple trackers.
- */
+// 3. Update your endMultiSession function:
 export async function endMultiSession(
   sessionId: string,
   trackers: Map<string, { tracker: ActionTracker; response: string }>,
@@ -179,8 +185,17 @@ export async function endMultiSession(
   const allActions = [...trackers.values()].flatMap((t) =>
     t.tracker.getActions()
   );
+  
+  // Isolate combined multi-agent approved actions
+  const multiAgentApprovedActions = allActions.filter((a) => a.status === "approved");
+
   const combinedResponse = responses.join("\n\n");
   const summary = await summariseSession(allActions, combinedResponse);
+
+  // Sync the aggregated multi-agent workspace tree globally
+  if (multiAgentApprovedActions.length > 0) {
+    await ActionHistoryManager.recordGlobalActions(sessionId, process.cwd(), multiAgentApprovedActions);
+  }
 
   updateSession(
     sessionId,
