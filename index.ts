@@ -32,7 +32,10 @@ program
   .version(pkg.version, "-v, --version", "Output the current version");
 
 program
-  .argument("[prompt...]", "Optional direct prompt goal to execute instantly in Agent Mode")
+  .argument(
+    "[prompt...]",
+    "Optional direct prompt goal to execute instantly in Agent Mode",
+  )
   .action(async (promptArray: string[]) => {
     if (promptArray && promptArray.length > 0) {
       const combinedGoal = promptArray.join(" ").trim();
@@ -74,7 +77,9 @@ program
   .action(async () => {
     const cfg = getSandboxConfigSafe();
     if (cfg.enabled) {
-      console.log(chalk.green(`\n  ✔ Sandbox mode is active (model: ${cfg.model})\n`));
+      console.log(
+        chalk.green(`\n  ✔ Sandbox mode is active (model: ${cfg.model})\n`),
+      );
       const reconfigure = await confirm({
         message: "Reconfigure sandbox mode?",
         initialValue: false,
@@ -86,8 +91,8 @@ program
     console.log(
       chalk.dim(
         "  Connects to the local sandbox server, fetches an API key,\n" +
-          `  and stores it in your OS keychain (encrypted). Model: ${SANDBOX_MODEL}\n`
-      )
+          `  and stores it in your OS keychain (encrypted). Model: ${SANDBOX_MODEL}\n`,
+      ),
     );
 
     const proceed = await confirm({
@@ -105,7 +110,7 @@ program
         doneMessage: "Sandbox activated!",
         failMessage: "Activation failed.",
       },
-      async () => activateSandbox()
+      async () => activateSandbox(),
     );
 
     if (result.success) {
@@ -139,6 +144,8 @@ program
         { value: "index.html", label: "Retro Snake Classic" },
         { value: "neon-breaker.html", label: "Neon Brick Breaker" },
         { value: "neon-pong.html", label: "Neon Pong" },
+        { value: "neon-tetris.html", label: "Neon Tetris" },
+        { value: "neon-memory.html", label: "Neon Memory" },
         { value: "exit", label: "Exit" },
       ],
     });
@@ -166,22 +173,33 @@ program
         },
       });
 
-      console.log(chalk.green(`\n  ✓ Local arcade matrix listening live at ${localUrl}`));
+      console.log(
+        chalk.green(`\n  ✓ Local arcade matrix listening live at ${localUrl}`),
+      );
       console.log(chalk.dim("  Press [Ctrl + C] to close.\n"));
 
       const startCmd =
-        process.platform === "win32" ? "start" :
-        process.platform === "darwin" ? "open" : "xdg-open";
+        process.platform === "win32"
+          ? "start"
+          : process.platform === "darwin"
+            ? "open"
+            : "xdg-open";
 
       exec(`${startCmd} ${localUrl}`);
     } catch (err) {
-      console.error(chalk.red(`\n  ✗ Port initialization blocked: ${(err as Error).message}\n`));
+      console.error(
+        chalk.red(
+          `\n  ✗ Port initialization blocked: ${(err as Error).message}\n`,
+        ),
+      );
     }
   });
 
 program
   .command("reset")
-  .description("Completely remove all configurations, sessions, and credentials")
+  .description(
+    "Completely remove all configurations, sessions, and credentials",
+  )
   .action(async () => {
     console.log(chalk.bold.yellow("\n  ⚠ Danger Zone"));
 
@@ -193,7 +211,8 @@ program
     }
 
     const authorized = await confirm({
-      message: "Purge all stored configurations, credentials, and session data?",
+      message:
+        "Purge all stored configurations, credentials, and session data?",
       initialValue: false,
     });
 
@@ -205,7 +224,10 @@ program
     try {
       fs.rmSync(targetDir, { recursive: true, force: true });
       console.log(chalk.green(`\n  ✓ Data wiped from ${targetDir}`));
-      console.log(chalk.dim("  To remove the binary: ") + chalk.cyan("npm uninstall -g astra-dev-cli\n"));
+      console.log(
+        chalk.dim("  To remove the binary: ") +
+          chalk.cyan("npm uninstall -g astra-dev-cli\n"),
+      );
     } catch (error) {
       console.error(chalk.red(`\n  ✗ Failed: ${(error as Error).message}\n`));
     }
