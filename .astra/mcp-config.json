@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "createdAt": "2026-06-26T09:04:00.000Z",
+  "mcpServers": {
+    "memory-server": {
+      "command": "uv",
+      "args": [
+        "run",
+        "mcp-server-memory"
+      ],
+      "env": {
+        "PATH": "/usr/local/bin:/usr/bin:/bin"
+      },
+      "healthStatus": "unknown",
+      "connectionAttempts": 0,
+      "cachedTools": [
+        {
+          "name": "remember_fact",
+          "description": "Store a core fact or observation about the repository.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "fact": { "type": "string" }
+            },
+            "required": ["fact"]
+          }
+        }
+      ]
+    }
+  }
+}
