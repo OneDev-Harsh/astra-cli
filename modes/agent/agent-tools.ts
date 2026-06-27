@@ -13,6 +13,7 @@ interface AgentToolHooks {
         componentName: string,
         installationPath: string,
     ) => Promise<string | void>;
+    afterMutation?: (path: string) => Promise<string | void>;
 }
 
 export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks = {}) {
@@ -47,7 +48,11 @@ export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks =
                 path: z.string(),
                 content: z.string().describe("Complete new file contents"),
             }),
-            execute: async ({ path: p, content }) => executor.modifyFile(p, content),
+            execute: async ({ path: p, content }) => {
+                const staged = executor.modifyFile(p, content);
+                const followUp = await hooks.afterMutation?.(executor.normalizePath(p));
+                return followUp ?? staged;
+            },
         }),
 
         delete_file: tool({
@@ -127,8 +132,11 @@ export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks =
                 search: z.string(),
                 replace: z.string(),
             }),
-            execute: async ({ path, search, replace }) =>
-                executor.replaceInFile(path, search, replace),
+            execute: async ({ path, search, replace }) => {
+                const staged = executor.replaceInFile(path, search, replace);
+                const followUp = await hooks.afterMutation?.(executor.normalizePath(path));
+                return followUp ?? staged;
+            },
         }),
 
         append_to_file: tool({
@@ -137,8 +145,11 @@ export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks =
                 path: z.string(),
                 content: z.string(),
             }),
-            execute: async ({ path, content }) =>
-                executor.appendToFile(path, content),
+            execute: async ({ path, content }) => {
+                const staged = executor.appendToFile(path, content);
+                const followUp = await hooks.afterMutation?.(executor.normalizePath(path));
+                return followUp ?? staged;
+            },
         }),
 
         insert_at_line: tool({
@@ -148,8 +159,11 @@ export function createAgentTools(executor: ToolExecutor, hooks: AgentToolHooks =
                 line: z.number(),
                 content: z.string(),
             }),
-            execute: async ({ path, line, content }) =>
-                executor.insertAtLine(path, line, content),
+            execute: async ({ path, line, content }) => {
+                const staged = executor.insertAtLine(path, line, content);
+                const followUp = await hooks.afterMutation?.(executor.normalizePath(path));
+                return followUp ?? staged;
+            },
         }),
 
         query_global_design_system: tool({

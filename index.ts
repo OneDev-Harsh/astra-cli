@@ -146,6 +146,7 @@ program
         { value: "neon-pong.html", label: "Neon Pong" },
         { value: "neon-tetris.html", label: "Neon Tetris" },
         { value: "neon-memory.html", label: "Neon Memory" },
+        { value: "neon-rush.html", label: "Neon Rush" },
         { value: "exit", label: "Exit" },
       ],
     });

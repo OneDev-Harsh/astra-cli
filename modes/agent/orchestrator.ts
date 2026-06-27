@@ -22,6 +22,8 @@ import { promptToRetryAiCall } from "../../ai/retry-prompt";
 import { logAndContinue } from "../../core/logger";
 import { createWebTools } from "../plan/web-tools";
 import { McpProxyManager } from "../mcp/manager";
+import { createNativeBrowserTools } from "./browser-tools";
+import { BrowserService } from "./browser-service";
 
 const customAstraInstruction = 
     "You are Astra, an AI-native development CLI companion tool built to help " +
@@ -171,6 +173,30 @@ export async function runAgentMode(preCapturedGoal?: string) {
         return `Created and applied ${filePath} after user approval.`;
     };
 
+    const approveMutation = async (filePath: string): Promise<string> => {
+        const ok = await runApprovalFlow(tracker, {
+            paths: [filePath],
+            skipBatchPrompt: true,
+        });
+
+        if (!ok) {
+            executor.discardStagedPath(filePath);
+            return `User rejected changes to ${filePath}. The modification has been discarded.`;
+        }
+
+        const { errors } = executor.applyApprovedFromTracker();
+        if (errors.length) {
+            executor.discardStagedPath(filePath);
+            logAndContinue("agent", new Error(`Failed to apply approved changes to ${filePath}: ${errors.join("; ")}`), {
+                filePath,
+                errorCount: errors.length,
+            });
+            throw new Error(`Failed to apply approved changes to ${filePath}: ${errors.join("; ")}`);
+        }
+
+        return `Changes to ${filePath} applied successfully.`;
+    };
+
     const approveComponentInstall = async (componentName: string, installationPath: string): Promise<string> => {
         // ─── REMOVED THE INTERACTIVE runApprovalFlow PROMPT ───
         
@@ -240,11 +266,12 @@ export async function runAgentMode(preCapturedGoal?: string) {
     }
 
     const tools = {
-        ...createAgentTools(executor, { afterCreateFile: approveCreatedFile, afterQueueComponentInstall: approveComponentInstall }),
+        ...createAgentTools(executor, { afterCreateFile: approveCreatedFile, afterQueueComponentInstall: approveComponentInstall, afterMutation: approveMutation }),
         ...createSessionTools(config.codebasePath),
         ...createWebTools(tracker),
         ...dynamicMcpTools,
         ...assembledMcpTools,
+        ...createNativeBrowserTools(),
     };
 
     const isUiOrSiteRequest = /build.*(site|page|dashboard|interface|app|ui|frontend|view|screen)|create.*(landing|component|layout)/i.test(goal);
@@ -383,4 +410,5 @@ export async function runAgentMode(preCapturedGoal?: string) {
 
     await endSession(sessionEntry.id, tracker, resultText || "(no response)");
     executor.discardChanges();
+    await BrowserService.getInstance().shutdown();
 }
