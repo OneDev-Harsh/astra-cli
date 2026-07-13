@@ -2,7 +2,7 @@
 
 # ✨ Astra
 
-**AI-native development companion — Agent, Ask, Plan, Auto, and Multi-Agent modes in your terminal.**
+**Your secure, browser-aware AI pair programmer — right inside your terminal.**
 
 [![npm version](https://img.shields.io/npm/v/astrabot?style=flat-square&logo=npm)](https://www.npmjs.com/package/astrabot)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
@@ -29,33 +29,40 @@
 - [Multi-Agent Orchestration](#multi-agent-orchestration)
 - [Sandbox Mode](#sandbox-mode)
 - [Skills System](#skills-system)
+- [Example Walkthroughs](#example-walkthroughs)
 - [Project Structure](#project-structure)
 - [Dependencies](#dependencies)
 - [Roadmap](#roadmap)
 - [License](#license)
+- [Easter Eggs & Fun](#easter-eggs--fun)
 
 ---
 
 ## What Is Astra?
 
-Astra is an **AI-native development companion** that brings agentic coding capabilities directly to your terminal. It gives an LLM full programmatic access to your filesystem, shell, and the web — all gated behind a **staging and approval system** that keeps you in control at all times.
+Astra is a **secure, browser-aware AI pair programmer** that lives in your terminal. Point it at your codebase, give it a goal, and it autonomously reads files, makes surgical edits, runs commands, browses the web, and controls a browser — all gated behind an interactive **staging-and-approval pipeline** that ensures no file is ever written without your sign-off.
 
-Built on [Bun](https://bun.sh), powered by [OpenRouter](https://openrouter.ai), and leveraging the [Vercel AI SDK](https://sdk.vercel.ai)'s `ToolLoopAgent` for autonomous, multi-step tool-driven workflows.
+Built on [Bun](https://bun.sh) and powered by [OpenRouter](https://openrouter.ai), Astra supports any frontier model available through the router. Whether you are fixing a bug across a dozen files, scraping a live website, or coordinating a team of specialized AI agents, Astra gives you full control without locking you into a single workflow.
 
 | Mode | Purpose | File Mutations? |
 |------|---------|:---------------:|
-| **Auto** | LLM-powered intent router — picks the best mode for your request | Depends on route |
-| **Agent** | Autonomous multi-step code modifications | ✅ (staged) |
-| **Ask** | Read-only Q&A about your codebase | ❌ (except optional save) |
-| **Plan** | Structured multi-step planning with selective execution | ✅ (staged) |
-| **Multi-Agent** | Multiple agents working in configurable topologies | ✅ (staged) |
+| **Auto** | Smart intent router — picks the right mode for your request automatically | Depends on route |
+| **Agent** | Autonomous multi-step code modifications with browser control | ✅ (staged) |
+| **Ask** | Read-only Q&A and deep analysis of your codebase | ❌ (except optional save) |
+| **Plan** | Structured step-by-step planning with selective execution | ✅ (staged) |
+| **Multi-Agent** | Multiple AI specialists working in parallel or sequence | ✅ (staged) |
 
 ---
 
 ## Features
 
 - **Five interaction modes** — Auto, Agent, Ask, Plan, and Multi-Agent
-- **35+ agent tools** — filesystem, shell, git, web research, project intelligence, and more
+- **60+ agent tools** — filesystem, shell, git, web research, project intelligence, browser automation, and MCP
+- **Native browser control** — full Playwright integration (23 tools) for headless navigation, clicking, typing, screenshots, and JavaScript evaluation
+- **Model Context Protocol (MCP)** — load any stdio MCP server at runtime and expose its tools to the agent natively
+- **Workspace conventions (`ASTRA.md`)** — drop a project rules file in your workspace root; all agents read and follow it automatically
+- **Surgical file editing** — agents prefer minimal, targeted edits (`replace_in_file`, `insert_at_line`) over full rewrites to keep token usage low
+- **Loop detection** — runtime warning when an agent calls the same tool with identical inputs repeatedly, prompting human intervention
 - **Streaming output** — real-time text generation with live token telemetry (↑input / ↓output, tok/s)
 - **Staging-first mutations** — no file is written or deleted without your explicit approval
 - **Per-file diff review** — granular approval flow with unified diffs
@@ -66,9 +73,7 @@ Built on [Bun](https://bun.sh), powered by [OpenRouter](https://openrouter.ai), 
 - **Web research** — search (Firecrawl or DuckDuckGo fallback), crawl, and URL fetch
 - **Rich terminal UI** — interactive prompts, markdown rendering, animated ASCII banner, colored logging
 - **Cross-platform installers** — automated setup for Linux/macOS and Windows
-- **Arcade** — 5 mini-games served via Bun's native HTTP server (easter egg)
-- **Streaming output** — Agent, Ask, and Plan modes use `agent.stream()` with real-time chunk display, live token telemetry, and OpenRouter prompt caching with sticky session routing
-- **Persistent action history** *(upcoming v0.1.7)* — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps; queryable across sessions via `ActionHistoryManager`
+- **Persistent action history** — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps
 
 ---
 
@@ -220,9 +225,6 @@ Interactive configuration wizard. See [Configuration](#configuration).
 
 Activates sandbox mode — a secure execution environment with OS keychain credential storage and HMAC-signed server communication.
 
-### `astra play`
-
-Launches the arcade — a game selector with 5 mini-games (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Neon Memory, Neon Tetris). Spawns a local server on port `4321` and opens your browser.
 
 ### `astra reset`
 
@@ -348,6 +350,28 @@ Astra exposes **35+ tools** to the AI agent:
 | `session_status` | Check recent session history |
 | `session_search` | Search previous sessions by keyword |
 | `session_resume_context` | Get full context of a previous session |
+
+### Browser Automation (Playwright)
+
+| Tool | Description |
+|------|-------------|
+| `browser_navigate` | Navigate to a URL (HTTP/HTTPS/file://) |
+| `browser_click` | Click an element matching a selector |
+| `browser_type` | Type text into a form input element |
+| `browser_take_screenshot` | Capture a screenshot of the current page |
+| `browser_snapshot` | Get page text, HTML content, page title, and URL |
+| `browser_get_text` | Retrieve the text content of a specific element |
+| `browser_new_tab` / `browser_switch_tab` | Manage multiple browser tabs |
+| `browser_evaluate` | Run custom JavaScript inside the page context |
+
+### Model Context Protocol (MCP)
+
+| Tool | Description |
+|------|-------------|
+| `list_mcp_servers` | List configured stdio MCP servers |
+| `add_mcp_server` | Add/configure a new MCP server |
+| `remove_mcp_server` | Remove a configured MCP server |
+| `invoke_mcp_tool` | Execute a tool on a connected MCP server |
 
 ---
 
@@ -502,6 +526,8 @@ astrabot/
 │   │   ├── types.ts                # ActionType, ActionLog, AgentConfig
 │   │   ├── action-tracker.ts       # Append-only action log
 │   │   ├── agent-tools.ts          # 35+ Vercel AI SDK tools
+│   │   ├── browser-service.ts      # Playwright browser manager
+│   │   ├── browser-tools.ts        # 23 Playwright-based browser tools
 │   │   ├── tool-executor.ts        # Staging overlay + implementations
 │   │   ├── diff-view.ts            # Unified diff generation
 │   │   ├── approval.ts             # Approval flow
@@ -514,6 +540,8 @@ astrabot/
 │   │   ├── selection.ts            # Step selection UI
 │   │   ├── web-tools.ts            # Firecrawl web tools
 │   │   └── orchestrator.ts         # Plan → select → execute → approve
+│   ├── mcp/                        # Model Context Protocol
+│   │   └── manager.ts              # MCP client and server proxy manager
 │   └── multi/                      # Multi-agent mode
 │       ├── types.ts                # Full type system
 │       ├── agent-pool-manager.ts   # Agent registration & tracking
@@ -528,7 +556,8 @@ astrabot/
 │   ├── session-manager.ts          # Lifecycle & auto-resume
 │   ├── session-context.ts          # Context summary for resumption
 │   ├── session-tools.ts            # session_status, search, resume
-│   └── session-cache.ts            # In-memory cache (debounced writes)
+│   ├── session-cache.ts            # In-memory cache (debounced writes)
+│   └── project-context.ts          # Workspace ASTRA.md context loader
 │
 ├── .skills/                        # Built-in skills
 │   ├── code-review/SKILL.md
@@ -542,7 +571,8 @@ astrabot/
 │   ├── neon-breaker.html           # Neon Brick Breaker
 │   ├── neon-pong.html              # Neon Pong
 │   ├── neon-memory.html            # Neon Memory
-│   └── neon-tetris.html            # Neon Tetris
+│   ├── neon-tetris.html            # Neon Tetris
+│   └── neon-rush.html              # Neon Rush arcade game
 │
 ├── tests/
 │   └── cli.test.ts                 # CLI smoke tests
@@ -590,6 +620,40 @@ astrabot/
 
 ---
 
+## Example Walkthroughs
+
+The following prompts illustrate real-world usage patterns. Run `astra` (or `astra "<prompt>"` to skip the menu) and enter the goal as shown.
+
+### 1 — Cross-file Bug Fixing
+
+```
+astra "There is a race condition in the session resumption logic. Read session/session-manager.ts and session/store.ts,
+find all places where the session file is read without locking, and apply the minimal targeted fix across all files."
+```
+
+Astra will read the relevant files, locate the buggy code, apply surgical `replace_in_file` patches across multiple files, and present a per-file diff before asking for your approval.
+
+### 2 — Web Scraping & Browser Automation
+
+```
+astra "Navigate to https://news.ycombinator.com, take a full-page screenshot, scrape the top 10 story titles and their
+point counts from the front page, and write the results to reports/hn-top10.json."
+```
+
+Astra will launch its built-in Playwright browser, navigate the page, extract data via DOM selectors, stage the JSON file, and request approval before writing to disk.
+
+### 3 — Multi-Agent Orchestration
+
+```
+astra "Run a full code quality pass on this project: spin up a Researcher to find all TODO/FIXME comments across the
+codebase, an Implementer to resolve each one with minimal targeted edits, and a Reviewer to run the test suite and
+check for regressions. Present a final summary."
+```
+
+Astra will design and execute a three-agent Sequential workflow. Each agent runs with role-scoped tool permissions, and all file mutations are batched into a single approval review.
+
+---
+
 ## Roadmap
 
 - [x] Streaming token output with real-time telemetry
@@ -601,6 +665,9 @@ astrabot/
 - [x] Centralised error logger
 - [x] Sandbox remote server migration
 - [x] Persistent action history (cross-session JSONL log)
+- [x] Playwright browser automation
+- [x] Model Context Protocol (MCP) integration
+- [x] Workspace context via ASTRA.md
 - [ ] Telegram mode
 - [ ] Undo/redo support via action log replay
 - [ ] Configurable tool allowlists per mode
@@ -611,6 +678,22 @@ astrabot/
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Easter Eggs & Fun
+
+### `astra play`
+
+Launches a built-in arcade — a game selector with 6 retro-style browser mini-games served over a local HTTP server.
+
+```bash
+astra play
+```
+
+Available games: Retro Snake Classic · Neon Brick Breaker · Neon Pong · Neon Memory · Neon Tetris · Neon Rush.
+
+Spawns a local server on port `4321` and opens your browser automatically.
 
 ---
 

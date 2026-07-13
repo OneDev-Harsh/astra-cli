@@ -212,7 +212,7 @@ export class MultiAgentOrchestrator {
         researcher:
           "You are Astra, an AI-native development CLI companion tool built to help the user navigate, analyze, and build within their workspace codebase. If the user asks who you are, what your name is, or what model you are running on, you must always identify yourself exclusively as Astra. Do not mention your underlying model architecture or provider. You are a Research Agent. Gather information, analyze codebases, and provide detailed findings. You have read-only file access.",
         implementer:
-          "You are Astra, an AI-native development CLI companion tool built to help the user navigate, analyze, and build within their workspace codebase. If the user asks who you are, what your name is, or what model you are running on, you must always identify yourself exclusively as Astra. Do not mention your underlying model architecture or provider. You are an Implementation Agent. Write code, modify files, and implement features. File changes are staged until approval.",
+          "You are Astra, an AI-native development CLI companion tool built to help the user navigate, analyze, and build within their workspace codebase. If the user asks who you are, what your name is, or what model you are running on, you must always identify yourself exclusively as Astra. Do not mention your underlying model architecture or provider. You are an Implementation Agent. Write code, modify files, and implement features. File changes are staged until approval.\n\nCRITICAL FILE MODIFICATION POLICY:\nTo minimize context window utilization, reduce token cost, and prevent merge conflicts, you MUST aggressively prefer surgical text editing tools ('replace_in_file', 'insert_at_line', 'append_to_file') over full-file replacements ('modify_file'). Full-file replacement ('modify_file') should ONLY be used when rewriting the entire file from scratch. Minimizing context size and token footprint is a primary success metric for your modifications.\n\nLOOP PREVENTION POLICY:\nIf you find yourself calling the exact same tool with the exact same arguments repeatedly (stuck in a loop), do NOT continue executing. Stop immediately, explain the issue clearly, and return a final message to prompt the user for human intervention rather wasting API usage on a stalling step.",
         reviewer:
           "You are Astra, an AI-native development CLI companion tool built to help the user navigate, analyze, and build within their workspace codebase. If the user asks who you are, what your name is, or what model you are running on, you must always identify yourself exclusively as Astra. Do not mention your underlying model architecture or provider. You are a Review Agent. Review code for quality, correctness, style, and potential issues. You can run tests and linting.",
         coordinator:
@@ -426,7 +426,10 @@ export class MultiAgentOrchestrator {
       const prompt = this._buildAgentPrompt(agentConfig);
       orchestrationLogger.info(agentConfig.id, "Generating model response");
 
-      const stepTimingState = { lastStepTimestamp: Date.now() };
+      const stepTimingState = { 
+        lastStepTimestamp: Date.now(),
+        repeatedCallsCount: new Map<string, number>()
+      };
 
       // FIX: Replace agent.generate() with agent.stream() & for await chunk loop
       const { result, stats } = await withRetry(
@@ -456,6 +459,23 @@ export class MultiAgentOrchestrator {
               if (toolCalls && toolCalls.length > 0) {
                 for (const tc of toolCalls) {
                   const toolName = String(tc.toolName);
+                  const key = `${toolName}:${JSON.stringify(tc.input)}`;
+                  const count = (stepTimingState.repeatedCallsCount.get(key) ?? 0) + 1;
+                  stepTimingState.repeatedCallsCount.set(key, count);
+
+                  if (count > 1) {
+                    this._emitEvent({
+                      type: "tool_executed",
+                      timestamp: new Date(),
+                      payload: {
+                        agentId: agentConfig.id,
+                        toolName: toolName,
+                        logLine: `  ${chalk.red("⚠️")} [${chalk.magenta(agentConfig.id)}] ${chalk.red.bold("POTENTIAL LOOP DETECTED:")} ` +
+                                 `Called ${chalk.cyan.bold(toolName)} with identical arguments ${chalk.yellow(`${count} times`)}.`
+                      }
+                    });
+                  }
+
                   if (!executedTools.includes(toolName)) {
                     executedTools.push(toolName);
                     orchestrationLogger.info(agentConfig.id, `Executed tool: ${toolName}`);

@@ -8,17 +8,22 @@ The format is based on [Keep a Changelog](https://keepacontain.com/en/1.1.0/), a
 
 ## [Unreleased]
 
-## [0.1.7] — Unreleased
+## [0.1.7] — 2026-07-13
 
 ### Added
 
+- **Browser Automation via Playwright** — Integrated Playwright browser-automation capabilities. Added `modes/agent/browser-service.ts` and `modes/agent/browser-tools.ts` containing a set of 23 cross-platform browser automation tools (e.g. `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_take_screenshot`, etc.). Supports multiple tabs, key presses, element selection, viewport adjustments, and custom JS evaluation.
+- **Model Context Protocol (MCP) Integration** — Integrated Model Context Protocol (MCP) client capabilities. Added `modes/mcp/manager.ts` allowing stdio-based MCP servers to register custom tools dynamically within the agent environment, with configurations read from `~/.astra/mcp.json` or `.astra/mcp-config.json`.
+- **Persistent Workspace-Level Context** — Added `ProjectContextLoader` in `session/project-context.ts` to look for an optional `ASTRA.md` file in the workspace root. If found, it automatically injects workspace-specific conventions and guidelines into the system prompts of all active agents.
 - **Persistent action history** — New `ActionHistoryManager` in `session/action-history.ts` that logs all approved/applied actions to a persistent global JSONL file at `~/.astra/history/actions.jsonl`. Each entry includes a UUID, session ID, workspace path, timestamp, and the full `ActionLog` record.
 - **Cross-session action queries** — `ActionHistoryManager` exposes `getGlobalHistory(limit)` to retrieve recent actions across all sessions (newest first) and `searchHistoryByFile(targetPath)` to find all historical actions targeting a specific file path.
 - **Automatic history sync on session end** — `endSession()` and `endMultiSession()` in `session/session-manager.ts` now automatically sync approved actions to the global history log upon completion.
 - **Automatic history sync on apply** — `applyApprovedFromTracker()` in `modes/agent/tool-executor.ts` now records successfully applied actions to the global history in real-time, with graceful fallback when no session store is available.
+- **Expanded Arcade Suite** — Integrated `Neon Rush` arcade game (`game/neon-rush.html`) into the standalone game selector (`astra play`).
 
 ### Changed
 
+- **CLI Wakeup Screen and Interface Upgrades** — Completely redesigned the wakeup greeting animation and welcome screen CLI options in `tui/wakeup.ts`, and updated the setup wizard in `modes/setup.ts` and option routing in `modes/cli.ts`.
 - **`applyApprovedFromTracker()` refactored** — Internal restructuring with clearly commented sections (folder ops, file ops, shell/tool ops) and a `successfullyAppliedActions` accumulator that feeds the history log after all operations complete.
 - **`endMultiSession()` cleaned up** — Removed stale comment block, extracted `multiAgentApprovedActions` filter for clarity.
 

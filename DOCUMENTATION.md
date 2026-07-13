@@ -1,6 +1,6 @@
 # Astra CLI — Complete Technical Documentation
 
-> **Version:** 0.1.6
+> **Version:** 0.1.7
 > **Runtime:** Bun (>=1.0.0)
 > **License:** MIT
 > **Package name:** `astrabot`
@@ -50,13 +50,17 @@ Built on [Bun](https://bun.sh), powered by [OpenRouter](https://openrouter.ai), 
 | **Plan** | Structured multi-step planning with selective execution | Yes (staged) |
 | **Multi-Agent** | Multiple agents working together in configurable topologies | Yes (staged) |
 
-A standalone **arcade** with 5 mini-games (HTML canvas) is also included.
+A standalone **arcade** with 6 mini-games (HTML canvas) is also included.
 
 ---
 
 ## 2. Feature Overview
 
 - **Five interaction modes** — Auto, Agent, Ask, Plan, and Multi-Agent
+- **60+ agent tools** — filesystem, shell, git, browser automation (Playwright), Model Context Protocol (MCP), web research, and project intelligence
+- **Browser Automation via Playwright** — Headless/headful browser control using Playwright with 23 tools (navigating, clicking, typing, page snapshots, screenshots, evaluation)
+- **Model Context Protocol (MCP) Support** — Dynamic load and configuration of stdio MCP servers and tools directly in the agent session
+- **Workspace-level Context (`ASTRA.md`)** — Automatic parsing and injection of `ASTRA.md` workspace guidelines into agent system prompts
 - **Streaming output** — all modes use `agent.stream()` with real-time chunk display and live token telemetry (↑input / ↓output counters, tok/s velocity)
 - **Full filesystem access** — read, create, modify, and delete files and directories through an AI agent, all via an in-memory staging overlay
 - **Shell execution** — queue arbitrary shell commands for agent-driven workflows (sync and background)
@@ -72,10 +76,10 @@ A standalone **arcade** with 5 mini-games (HTML canvas) is also included.
 - **Rich terminal UI** — interactive prompts via `@clack/prompts`, markdown rendering via `marked` + `marked-terminal`, figlet ASCII banner, animated spinners, colored logging
 - **Multi-model support** — per-agent model override in Multi-Agent mode
 - **Retry on failure** — configurable retry logic for AI provider calls and multi-agent step failures
-- **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed server communication
+- **Sandbox mode** — optional secure execution environment with OS keychain credential storage and HMAC-signed communication
 - **Cross-platform installers** — automated setup scripts for Linux/macOS and Windows
 - **Centralised error logging** — rotating log file at `~/.astra/logs/astra.log` with ring buffer for post-mortem debugging
-- **Persistent action history** *(upcoming v0.1.7)* — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps; queryable across sessions via `ActionHistoryManager`
+- **Persistent action history** — all approved actions logged to `~/.astra/history/actions.jsonl` with session ID, workspace path, and timestamps; queryable across sessions via `ActionHistoryManager`
 
 ---
 
@@ -222,7 +226,7 @@ Activates sandbox mode. Connects to the sandbox server (`https://astra-server-oh
 
 ### `astra play`
 
-Launches the arcade — 5 mini-games (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Neon Memory, Neon Tetris). Spawns a local Bun HTTP server on port `4321` and opens the default browser.
+Launches the arcade — 6 mini-games (Retro Snake Classic, Neon Brick Breaker, Neon Pong, Neon Memory, Neon Tetris, and Neon Rush). Spawns a local Bun HTTP server on port `4321` and opens the default browser.
 
 ### `astra reset`
 
@@ -316,6 +320,8 @@ Read-only Q&A interface.
 2. **`createAgentTools()`** (`modes/agent/agent-tools.ts`) — Wraps `ToolExecutor` methods as Vercel AI SDK `tool()` with Zod schemas.
 3. **`createWebTools()`** (`modes/plan/web-tools.ts`) — Firecrawl-based web tools.
 4. **`createSessionTools()`** (`session/session-tools.ts`) — Session management tools injected into every agent.
+5. **`createNativeBrowserTools()`** (`modes/agent/browser-tools.ts`) — Playwright browser automation tools.
+6. **`McpProxyManager`** (`modes/mcp/manager.ts`) — Stdio-based Model Context Protocol (MCP) server manager.
 
 ### Complete Tool List
 
@@ -358,6 +364,19 @@ Read-only Q&A interface.
 | `session_status` | Show recent sessions | ❌ |
 | `session_search` | Search previous sessions | ❌ |
 | `session_resume_context` | Get full context of a previous session | ❌ |
+| `browser_navigate` | Navigate browser to a URL (supports http/https/file) | ❌ |
+| `browser_click` | Click on page element matching a selector | ❌ |
+| `browser_type` | Enter text into form input fields | ❌ |
+| `browser_take_screenshot` | Capture current page screenshot to file | ❌ |
+| `browser_snapshot` | Scrape page HTML, text content, title, and URL | ❌ |
+| `browser_get_text` | Get text content of specific element | ❌ |
+| `browser_new_tab` / `browser_switch_tab` | Manage and switch between active browser tabs | ❌ |
+| `browser_list_tabs` / `browser_set_viewport` | List open tabs or change browser viewport resolution | ❌ |
+| `browser_evaluate` | Run custom JavaScript inside the browser context | ❌ |
+| `list_mcp_servers` | List configured stdio MCP servers and connection status | ❌ |
+| `add_mcp_server` | Add and configure a new stdio-based MCP server | ❌ |
+| `remove_mcp_server` | Disconnect and remove a configured MCP server | ❌ |
+| `invoke_mcp_tool` | Forward a tool execution to a connected MCP server | ❌ |
 
 ### Staging Overlay Internals
 
@@ -374,6 +393,37 @@ private appliedActionIds = new Set<string>() // already-applied action IDs
 - `deleteFile()`: removes from `overlay`, adds to `deleted`
 - `getEffectiveText()`: checks `deleted` → `overlay` → disk, in that order
 - `discardStagedPath()`: removes from both `overlay` and `deleted`
+
+### Browser Automation (Playwright)
+
+Astra integrates Playwright for full programmatic browser control, enabling agents to navigate pages, click buttons, submit forms, take screenshots, and scrape content. This is managed by the `BrowserService` class (`modes/agent/browser-service.ts`) which maintains a singleton Chromium browser instance.
+
+The browser automation tools are defined in `modes/agent/browser-tools.ts`:
+- **`browser_navigate`**: Navigates the current tab to a specified URL (supports http, https, and file protocols).
+- **`browser_click`**: Clicks on a page element identified by a CSS, text, XPath, or ARIA selector.
+- **`browser_type`**: Enters text into form input fields.
+- **`browser_take_screenshot`**: Captures a PNG/JPEG screenshot of the current viewport or specific element.
+- **`browser_snapshot`**: Extracts the page text content, HTML source, current title, and URL.
+- **`browser_evaluate`**: Evaluates custom JavaScript in the context of the page, returning serializable results.
+- **`browser_new_tab` / `browser_switch_tab` / `browser_list_tabs`**: Manages tab lifecycle, supporting multi-tab workflows.
+
+### Model Context Protocol (MCP)
+
+Astra supports the Model Context Protocol (MCP), allowing standard stdio-based MCP servers to dynamically expose their tools to Astra's agent environment.
+
+MCP client configurations are handled by the `McpProxyManager` class (`modes/mcp/manager.ts`). It loads server configs from the global file at `~/.astra/mcp.json` or workspace-local `.astra/mcp-config.json` configuration file, which lists the executable name, arguments, and environment variables for each server.
+
+**Client Tools:**
+- **`list_mcp_servers`**: Lists all active and configured MCP servers, showing connection health and metrics.
+- **`add_mcp_server`**: Registers a new stdio-based server.
+- **`remove_mcp_server`**: Disconnects and removes a server config.
+- **`invoke_mcp_tool`**: Forwards tool calls to the target MCP server and returns the results.
+
+### Workspace Context (`ASTRA.md`)
+
+Astra supports workspace-level instruction customisation via a local `ASTRA.md` file.
+
+The `ProjectContextLoader` (`session/project-context.ts`) searches for an `ASTRA.md` file in the workspace directory tree on session initialization. If discovered, it reads the conventions (e.g. project rules, coding standards, framework configurations) and wraps them inside a project conventions context block. This context is then prepended to the system prompt of all agents launched during the session.
 
 ---
 
@@ -734,6 +784,8 @@ astrabot/
 │   │   ├── types.ts                # ActionType, ActionLog, AgentConfig
 │   │   ├── action-tracker.ts       # Append-only action log
 │   │   ├── agent-tools.ts          # 35+ Vercel AI SDK tools
+│   │   ├── browser-service.ts      # Playwright browser manager
+│   │   ├── browser-tools.ts        # 23 Playwright-based browser tools
 │   │   ├── tool-executor.ts        # Staging overlay + implementations
 │   │   ├── diff-view.ts            # Unified diff generation
 │   │   ├── approval.ts             # Approval flow
@@ -746,6 +798,8 @@ astrabot/
 │   │   ├── selection.ts            # Step selection UI
 │   │   ├── web-tools.ts            # Firecrawl web tools
 │   │   └── orchestrator.ts         # Plan → select → execute → approve
+│   ├── mcp/                        # Model Context Protocol
+│   │   └── manager.ts              # MCP client and server proxy manager
 │   └── multi/                      # Multi-agent mode
 │       ├── types.ts                # Full type system
 │       ├── agent-pool-manager.ts   # Agent registration & tracking
@@ -762,7 +816,8 @@ astrabot/
 │   ├── session-context.ts          # Context summary for resumption
 │   ├── session-tools.ts            # session_status, search, resume
 │   ├── session-cache.ts            # In-memory cache (debounced writes)
-│   └── action-history.ts           # Persistent cross-session action log (v0.1.7)
+│   ├── action-history.ts           # Persistent cross-session action log
+│   └── project-context.ts          # Workspace ASTRA.md context loader
 │
 ├── .skills/                        # Built-in skills
 │   ├── code-review/SKILL.md
@@ -776,7 +831,8 @@ astrabot/
 │   ├── neon-breaker.html           # Neon Brick Breaker
 │   ├── neon-pong.html              # Neon Pong
 │   ├── neon-memory.html            # Neon Memory
-│   └── neon-tetris.html            # Neon Tetris
+│   ├── neon-tetris.html            # Neon Tetris
+│   └── neon-rush.html              # Neon Rush arcade game
 │
 ├── tests/
 │   └── cli.test.ts                 # CLI smoke tests
@@ -841,12 +897,14 @@ astrabot/
 - [x] ~~Skills system~~ — 5 built-in skills
 - [x] ~~Centralised error logger~~ — implemented with rotating file output
 - [x] ~~Sandbox remote server~~ — migrated in v0.1.5
-- [x] ~~Persistent action history~~ — cross-session JSONL action log, implemented in v0.1.6
+- [x] ~~Persistent action history across sessions~~ — implemented in v0.1.7
+- [x] ~~Playwright browser control~~ — implemented in v0.1.7
+- [x] ~~Model Context Protocol (MCP) integration~~ — implemented in v0.1.7
+- [x] ~~Workspace context (ASTRA.md)~~ — implemented in v0.1.7
 - [ ] Telegram mode
 - [ ] Undo/redo support via action log replay
 - [ ] Configurable tool allowlists per mode
 - [ ] Per-mode model selection
-- [ ] Persistent action history across sessions
 
 ---
 
@@ -865,7 +923,7 @@ User Input (goal)
          │ agent.stream()
          ▼
 ┌─────────────────┐
-│  ToolLoopAgent   │──── 35+ tools available
+│  ToolLoopAgent   │──── 60+ tools available
 │  (Vercel AI SDK) │◄──── max 50 steps
 │                  │◄──── context summary (if resuming)
 └────────┬────────┘

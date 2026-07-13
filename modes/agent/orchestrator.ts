@@ -30,7 +30,11 @@ const customAstraInstruction =
     "the user navigate, analyze, and build within their workspace codebase. If the user asks " +
     "who you are, what your name is, or what model you are running on, you must always identify " +
     "yourself exclusively as Astra. Do not mention your underlying model architecture or provider. " +
-    "When the user requests highly immersive, interactive, or fluidly animated interfaces, do not code complex WebGL or long canvas setups manually. Use the 'fetch_premium_ui_component' tool to retrieve specialized visual layouts, animations, and components natively. Always call this tool to fetch all premium components FIRST before building pages or layouts that depend on them.";
+    "When the user requests highly immersive, interactive, or fluidly animated interfaces, do not code complex WebGL or long canvas setups manually. Use the 'fetch_premium_ui_component' tool to retrieve specialized visual layouts, animations, and components natively. Always call this tool to fetch all premium components FIRST before building pages or layouts that depend on them." +
+    "\n\nCRITICAL FILE MODIFICATION POLICY:\n" +
+    "To minimize context window utilization, reduce token cost, and prevent merge conflicts, you MUST aggressively prefer surgical text editing tools ('replace_in_file', 'insert_at_line', 'append_to_file') over full-file replacements ('modify_file'). Full-file replacement ('modify_file') should ONLY be used when rewriting the entire file from scratch. Minimizing context size and token footprint is a primary success metric for your modifications.\n" +
+    "\nLOOP PREVENTION POLICY:\n" +
+    "If you find yourself calling the exact same tool with the exact same arguments repeatedly (stuck in a loop), do NOT continue executing. Stop immediately, explain the issue clearly, and return a final message to prompt the user for human intervention rather than wasting API usage on a stalling step.";
 
 function extractUsage(usage: unknown): LanguageModelUsage {
     const raw = usage as any;
@@ -70,7 +74,7 @@ function getToolDetailsString(toolName: string, input: any): string {
     }
 }
 
-function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp: number }) {
+function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp: number; repeatedCallsCount: Map<string, number> }) {
     return ({ toolCalls, usage }: { toolCalls: any[]; usage?: any }) => {
         const now = Date.now();
         const stepDurationMs = now - state.lastStepTimestamp;
@@ -84,6 +88,17 @@ function createStepFinishHandler(ctx: SpinnerContext, state: { lastStepTimestamp
         // Process step logs BEFORE updating token configurations to preserve layout line states
         if (toolCalls && toolCalls.length > 0) {
             for (const tool of toolCalls) {
+                const key = `${tool.toolName}:${JSON.stringify(tool.input)}`;
+                const count = (state.repeatedCallsCount.get(key) ?? 0) + 1;
+                state.repeatedCallsCount.set(key, count);
+
+                if (count > 1) {
+                    ctx.logStep(
+                        `  ${chalk.red("⚠️")} ${chalk.red.bold("POTENTIAL LOOP DETECTED:")} ` +
+                        `Called ${chalk.cyan.bold(tool.toolName)} with identical arguments ${chalk.yellow(`${count} times`)}.`
+                    );
+                }
+
                 const detailedInfo = getToolDetailsString(tool.toolName, tool.input);
                 const separator = detailedInfo ? " — " : "";
 
@@ -107,7 +122,10 @@ async function streamAgentCall(
     prompt: string,
     ctx: SpinnerContext,
 ): Promise<string> {
-    const stepTimingState = { lastStepTimestamp: Date.now() };
+    const stepTimingState = { 
+        lastStepTimestamp: Date.now(),
+        repeatedCallsCount: new Map<string, number>()
+    };
 
     const streamResult = await agent.stream({
         prompt,
