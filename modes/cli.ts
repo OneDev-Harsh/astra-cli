@@ -11,7 +11,7 @@ export async function runCliMode () {
         const mode = await select({
             message: "Choose CLI mode:",
             options: [
-                {value: "auto", label:"Auto Mode"},
+                // {value: "auto", label:"Auto Mode"},
                 {value: "agent", label:"Agent Mode"},
                 {value: "plan", label:"Plan Mode"},
                 {value: "ask", label:"Ask Mode"},
@@ -41,9 +41,9 @@ export async function runCliMode () {
             // if(isCancel(warning) || warning === "cancel") return
             await runMultiAgentMode()
         }
-        else if(mode==="auto"){
-            await runAutoMode()
-        }
+        // else if(mode==="auto"){
+        //     await runAutoMode()
+        // }
         if(mode!=="agent" && mode!=="plan" && mode!=="ask" && mode!=="multi" && mode!="auto"){
             console.log(chalk.yellow('\n This mode is not implemented yet. \n'))
         }

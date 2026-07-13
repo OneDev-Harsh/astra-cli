@@ -89,16 +89,37 @@ async function runSandboxSetup(): Promise<void> {
     )
   );
 
-  // Check if server is running
+  const SERVER_URL = "https://astra-server-oh6s.onrender.com";
+  const MAX_RETRIES = 12;
+  const RETRY_INTERVAL_MS = 5000;
   let serverReady = false;
-  try {
-    const res = await fetch("https://astra-server-oh6s.onrender.com/health", {
-      signal: AbortSignal.timeout(2000),
-    });
-    serverReady = res.ok;
-  } catch {
-    serverReady = false;
+
+  // ── Server Connectivity Polling Loop ─────────────────────────────────────
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch(`${SERVER_URL}/health`, {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (res.ok) {
+        serverReady = true;
+        break;
+      }
+    } catch {
+      // Suppress network exceptions to seamlessly fall back to retrying
+    }
+
+    if (attempt < MAX_RETRIES) {
+      // Dynamic live frame updating without flooding the terminal buffer
+      process.stdout.write(
+        chalk.dim(
+          `  \r› Server unreachable. Retrying connection (${attempt}/${MAX_RETRIES}) in ${RETRY_INTERVAL_MS / 1000}s...`
+        )
+      );
+      await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+    }
   }
+  // Clear the active continuous loop text row cleanly
+  process.stdout.write("\r\x1b[K");
 
   if (!serverReady) {
     console.log(
@@ -111,7 +132,7 @@ async function runSandboxSetup(): Promise<void> {
 
     outro(
       chalk.yellow(
-        `\n⚠ Sandbox setup incomplete.\n` +
+        `\n⚠ Sandbox setup incomplete after ${MAX_RETRIES} attempts.\n` +
           `  Ensure the sandbox server is running, then run "astra setup" again.\n`
       )
     );
@@ -130,7 +151,7 @@ async function runSandboxSetup(): Promise<void> {
         failMessage: "Activation failed.",
       },
       async () => {
-        return activateSandbox("https://astra-server-oh6s.onrender.com");
+        return activateSandbox(SERVER_URL);
       }
     );
   } catch (err) {

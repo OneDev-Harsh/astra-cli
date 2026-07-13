@@ -15,6 +15,7 @@ const C = {
     dim: chalk.hex("#6b7280"),          // Subtle gray for secondary metadata
     success: chalk.bold.hex("#34d399"),  // Emerald green accent
     warning: chalk.bold.hex("#fbbf24"),  // Amber yellow for attention items
+    border: chalk.hex("#374151"),       // Sleek border tone for Claude-like cards
 };
 
 /**
@@ -30,15 +31,12 @@ function lerpHex(from: string, to: string, t: number): string {
 }
 
 // ── Star Field ──────────────────────────────────────────────────────────────
-// Each star has a stable position and an independent phase offset so they
-// twinkle asynchronously. Layout seeded deterministically — same every run.
 type Star = { col: number; row: number; phaseOffset: number; speed: number };
 
 const STAR_GLYPHS = ["·", "·", "+", "✦", "✧", "✦", "★"];
 const STAR_COLORS = ["#3b2f6e", "#4c3a8a", "#7c5cbf", "#a78bfa", "#c4b0fd", "#e0d4ff"];
 
 function buildStarField(lineCount: number): Star[] {
-    // Seeded LCG — stable positions across every frame / run
     let seed = 0xdeadbeef;
     const rand = () => {
         seed ^= seed << 13;
@@ -48,23 +46,20 @@ function buildStarField(lineCount: number): Star[] {
     };
 
     const stars: Star[] = [];
-    const density = 3; // stars per banner row
+    const density = 3; 
     for (let row = 0; row < lineCount; row++) {
         for (let i = 0; i < density; i++) {
             stars.push({
                 row,
-                col:         Math.floor(rand() * 38) + 2,  // spread across ~38 cols
-                phaseOffset: rand() * Math.PI * 2,          // independent twinkle start
-                speed:       0.6 + rand() * 1.2,            // each star at its own rate
+                col:         Math.floor(rand() * 38) + 2,
+                phaseOffset: rand() * Math.PI * 2,
+                speed:       0.6 + rand() * 1.2,
             });
         }
     }
     return stars;
 }
 
-/**
- * Renders one star glyph at the current animation time.
- */
 function renderStar(star: Star, time: number): string {
     const brightness = 0.5 + 0.5 * Math.sin(time * star.speed + star.phaseOffset);
     const glyphIdx   = Math.floor(brightness * (STAR_GLYPHS.length - 1));
@@ -72,13 +67,8 @@ function renderStar(star: Star, time: number): string {
     return chalk.hex(STAR_COLORS[colorIdx]!)(STAR_GLYPHS[glyphIdx]);
 }
 
-/**
- * Returns one sidebar string per banner line — a fixed-width column of stars
- * placed at stable positions, each pulsing independently.
- */
 function buildStarSidebar(stars: Star[], lineCount: number, time: number): string[] {
     const WIDTH = 42;
-    // Build per-row character arrays; stars overwrite their slot with a chalk string
     const rows: (string)[][] = Array.from({ length: lineCount }, () => Array(WIDTH).fill(" "));
     for (const star of stars) {
         if (star.row < lineCount && star.col < WIDTH) {
@@ -88,12 +78,10 @@ function buildStarSidebar(stars: Star[], lineCount: number, time: number): strin
     return rows.map((cols) => cols.join(""));
 }
 
-// Pre-built star field — initialised once, reused every frame
 let _starField: Star[] | null = null;
 
 /**
- * Prints the banner at a specific breath phase (0 = dim, 1 = full brightness),
- * with a twinkling star field to the right. Clears the screen each frame.
+ * Prints the banner with clean typographic metadata grids mirroring Claude's desktop layout.
  */
 function drawBanner(ascii: string, phase: number, time: number): void {
     const color = lerpHex("#2e1f5e", "#a78bfa", phase);
@@ -103,23 +91,22 @@ function drawBanner(ascii: string, phase: number, time: number): void {
     const sidebar = buildStarSidebar(_starField, lines.length, time);
 
     console.clear();
-    console.log();
+    console.log(); // Generous top padding
+    
     lines.forEach((line, i) => {
         console.log(`  ${chalk.bold.hex(color)(line)}  ${sidebar[i]}`);
     });
-    console.log(
-        `\n  ${C.success("●")} ${C.text("ASTRA")} ${C.dim("│")} ${C.dim("AI-native development companion")}`
-    );
-    console.log(`  ${C.dim(`  Version ${pkg.version} — Environment Ready`)}\n`);
+
+    // Claude UX refinement: Structured, framed sub-metadata block
+    console.log(`\n  ${C.border("┌────────────────────────────────────────────────────────────┐")}`);
+    console.log(`  ${C.border("│")}  ${C.brand("ASTRA")} ${C.dim("•")} ${C.text("AI-Native Development Environment")}                 ${C.border("│")}`);
+    console.log(`  ${C.border("│")}  ${C.dim(`Version ${pkg.version}`)} ${C.dim("│")} ${C.success("● Online")} ${C.dim(" ")}                                ${C.border("│")}`);
+    console.log(`  ${C.border("└────────────────────────────────────────────────────────────┘")}\n`);
 }
 
-/**
- * Plays one full inhale→exhale breath cycle on the banner (with live star
- * twinkling throughout), then leaves it rendered at full brightness.
- */
 export async function printBanner(ascii: string): Promise<void> {
-    const DURATION_MS = 1600;
-    const FPS = 28;
+    const DURATION_MS = 1400; // Slightly faster for a snappier interface response
+    const FPS = 30;
     const INTERVAL = Math.round(1000 / FPS);
     const steps = Math.round(DURATION_MS / INTERVAL);
     const startTime = Date.now();
@@ -129,12 +116,10 @@ export async function printBanner(ascii: string): Promise<void> {
         const timer = setInterval(() => {
             if (step > steps) {
                 clearInterval(timer);
-                // Final frame: guaranteed full brightness
                 drawBanner(ascii, 1, (Date.now() - startTime) / 1000);
                 resolve();
                 return;
             }
-            // Cosine curve: 1 → 0 → 1 (bright → dim → bright)
             const phase = 0.5 + 0.5 * Math.cos((step / steps) * 2 * Math.PI);
             const time  = (Date.now() - startTime) / 1000;
             drawBanner(ascii, phase, time);
@@ -143,20 +128,16 @@ export async function printBanner(ascii: string): Promise<void> {
     });
 }
 
-/**
- * Standard initialization workflow wrapped in the custom loader framework
- */
 async function initializeSystem(): Promise<string> {
     return await withSpinner(
         {
-            message: "Initializing Astra development workspace...",
-            doneMessage: "Workspace initialized successfully.",
-            failMessage: "Initialization failed. Falling back to default canvas.",
+            message: "Configuring development workspace...",
+            doneMessage: "Workspace configured.",
+            failMessage: "Initialization failed. Reverting to standard canvas.",
         },
         async (ctx) => {
-            // Light natural pacing overhead to ensure the UI feels responsive
             await new Promise((resolve) => setTimeout(resolve, 400));
-            ctx.updateMetric("Loading configuration");
+            ctx.updateMetric("Indexing project architecture");
             
             let ascii = "";
             try {
@@ -166,7 +147,7 @@ async function initializeSystem(): Promise<string> {
             }
             
             await new Promise((resolve) => setTimeout(resolve, 300));
-            ctx.updateMetric("Ready");
+            ctx.updateMetric("Environment ready");
             return ascii;
         }
     );
@@ -174,8 +155,6 @@ async function initializeSystem(): Promise<string> {
 
 export async function runWakeup() {
     console.clear();
-    
-    // Boot up sequence displaying your metric-enhanced loader
     const ascii = await initializeSystem();
 
     while (true) {
@@ -185,48 +164,44 @@ export async function runWakeup() {
         // Check for resumable session states
         const recent = getResumableSession(process.cwd());
         if (recent && recent.status === "interrupted") {
-            console.log(
-                `  ${C.warning("⏸  Previous session was interrupted:")} ${C.text(recent.lastGoal.slice(0, 60))}...`
-            );
-            console.log(`     ${C.dim(formatSessionLine(recent))}\n`);
+            // Claude UX refinement: Interrupted sessions structured as clean, boxed callout cards
+            console.log(`  ${C.warning("┌── Interrupted Session Detected ────────────────────────────")}`);
+            console.log(`  ${C.warning("│")}  ${C.text("Goal:")} ${C.text(recent.lastGoal.slice(0, 50))}...`);
+            console.log(`  ${C.warning("│")}  ${C.dim(formatSessionLine(recent))}`);
+            console.log(`  ${C.warning("└────────────────────────────────────────────────────────────")}\n`);
             
             const resume = await confirm({
-                message: "Would you like to resume this session?",
+                message: "Would you like to resume this pipeline?",
                 initialValue: true,
             });
             
             if (!isCancel(resume) && resume) {
                 (globalThis as any).__ASTRA_RESUME_SESSION__ = recent.id;
-                console.log(C.dim("  Re-attaching to pipeline context..."));
+                console.log(`\n  ${C.dim("› Re-attaching to execution context...")}\n`);
                 await runCliMode();
                 continue;
             }
+            console.log(); // Spacing if rejected
         }
 
-        // Clean, structured interactive select layout
+        // Clean interactive execution select layout
         const mode = await select({
             message: "Select an execution mode to proceed:",
             options: [
-                { value: "cli", label: "Interactive CLI Mode" },
-                //{ value: "telegram", label: "Telegram Gateway Interface" },
-                { value: "exit", label: "Exit Application" }
+                { value: "cli", label: "Interactive CLI Mode", hint: "Full workspace context" },
+                { value: "exit", label: "Exit Application", hint: "Safely teardown session" }
             ]
         });
 
         if (isCancel(mode) || mode === "exit") {
-            console.log(C.dim("\n  Session closed. Goodbye.\n"));
+            console.log(`\n  ${C.dim("✓ Session closed cleanly. Goodbye.")}\n`);
             return;
         }
 
         if (mode === "cli") {
-            console.log(C.dim("  Launching local environment CLI..."));
+            console.log(`\n  ${C.dim("› Booting runtime terminal...")}\n`);
             await runCliMode();
             continue;
-        }
-
-        if (mode === "telegram") {
-            console.log(C.dim("  Connecting to Telegram services..."));
-            await new Promise((resolve) => setTimeout(resolve, 1000));
         }
     }
 }
