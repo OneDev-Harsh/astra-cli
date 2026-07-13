@@ -411,4 +411,5 @@ export async function runAgentMode(preCapturedGoal?: string) {
     await endSession(sessionEntry.id, tracker, resultText || "(no response)");
     executor.discardChanges();
     await BrowserService.getInstance().shutdown();
+    await McpProxyManager.getInstance().shutdown();
 }

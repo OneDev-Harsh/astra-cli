@@ -547,7 +547,7 @@ export class WorkflowTemplates {
   static fullStackFeatureWorkflow(workflowId: string, goal: string): MultiAgentWorkflow {
     return new WorkflowBuilder(workflowId, goal)
       .addCoordinator("architect", "Architect", "Designs the system and creates specs", {
-        model: "openrouter/owl-alpha",
+        model: "openrouter/free",
       })
       .addImplementer("db_dev", "DB Developer", "Schema design and migrations", {
         dependsOn: ["architect"],

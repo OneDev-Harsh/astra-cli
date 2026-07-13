@@ -92,6 +92,7 @@ export async function runApprovalFlow(
     // No changes to review
     if(pending.length === 0){
         console.log(chalk.dim('\nNo staged file, folder or shell changes to review.\n'))
+        console.log(chalk.dim(`Press 'CTRL+C' to exit or run another command.\n`));
         return false  // ✓ Correct: nothing to approve
     }
 

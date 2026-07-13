@@ -45,7 +45,7 @@ interface CachedKey {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-export const SANDBOX_MODEL = "openrouter/owl-alpha" as const;
+export const SANDBOX_MODEL = "openrouter/free";
 export const SANDBOX_SERVER_DEFAULT_PORT = 3000;
 export const SANDBOX_KEY_TTL_MS = 5 * 60 * 1_000;
 
