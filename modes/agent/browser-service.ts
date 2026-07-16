@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page, type BrowserServer } from "playwright";
 import { logAndContinue } from "../../core/logger";
 
 /**
@@ -21,6 +21,7 @@ import { logAndContinue } from "../../core/logger";
 export class BrowserService {
     private static instance: BrowserService | null = null;
 
+    private browserServer: BrowserServer | null = null;
     private browser: Browser | null = null;
     private masterContext: BrowserContext | null = null;
     private activePage: Page | null = null;
@@ -65,6 +66,9 @@ export class BrowserService {
         const shutdown = () => {
             // Synchronous close — no async in signal handlers
             try {
+                if (this.browserServer) {
+                    this.browserServer.kill().catch(() => {});
+                }
                 if (this.browser && this.browser.isConnected()) {
                     // close() is fire-and-forget in signal context
                     this.browser.close().catch(() => {});
@@ -75,6 +79,11 @@ export class BrowserService {
         process.on("SIGINT", () => {
             shutdown();
             process.exit(130); // 128 + SIGINT(2)
+        });
+
+        process.on("SIGTERM", () => {
+            shutdown();
+            process.exit(143); // 128 + SIGTERM(15)
         });
 
         process.on("exit", shutdown);
@@ -150,37 +159,73 @@ export class BrowserService {
 
     /**
      * Single launch attempt. Creates browser → context → page.
-     * Always uses headless: true to guarantee reliability across terminal/server environments.
+     *
+     * Prefers a real, visible system browser (Chrome, then Edge) so the user
+     * actually sees a window open, falling back to Playwright's bundled
+     * Chromium only if neither system browser is installed. Runs headless
+     * only when there's genuinely no display to render to, or when the
+     * caller explicitly opts in via HEADLESS=true.
      */
-    private async doLaunch(attempt: number): Promise<Page> {
-    // 1. Smart environment detection for headless fallback
-    const isHeadlessEnv = !process.env.DISPLAY && process.platform !== 'win32' && process.platform !== 'darwin';
-    const headless = isHeadlessEnv || attempt > 1 || process.env.HEADLESS === "true";
+    private async doLaunch(_attempt: number): Promise<Page> {
+        const noDisplayLinux =
+            process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+        const headless = process.env.HEADLESS === "true" || noDisplayLinux;
 
-    const launchOptions = {
-        headless,
-        timeout: BrowserService.LAUNCH_TIMEOUT,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-        ],
-    };
+        const baseArgs = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"];
 
-    this.browser = await chromium.launch(launchOptions);
-    this.masterContext = await this.browser.newContext({
-        viewport: { width: 1280, height: 720 },
-    });
+        // Try a real system browser first for a genuine visible window;
+        // fall back to Playwright's bundled Chromium if neither is installed.
+        // In headless mode there's no window to show, so skip straight to bundled Chromium.
+        const channelsToTry: Array<string | undefined> = headless
+            ? [undefined]
+            : ["chrome", "msedge", undefined];
 
-    // Create initial page
-    const page = await this.masterContext.newPage();
+        let lastLaunchError: unknown;
 
-    // ❌ REMOVE OR COMMENT OUT THIS HANGING LINE:
-    // await page.waitForLoadState("domcontentloaded").catch(() => {});
-    
-    return page;
-}
+        for (const channel of channelsToTry) {
+            try {
+                // Use launchServer and connect to work around Bun's Windows pipe limitations
+                this.browserServer = await chromium.launchServer({
+                    headless,
+                    timeout: BrowserService.LAUNCH_TIMEOUT,
+                    args: baseArgs,
+                    ...(channel ? { channel } : {}),
+                });
+
+                this.browser = await chromium.connect({
+                    wsEndpoint: this.browserServer.wsEndpoint(),
+                    timeout: BrowserService.LAUNCH_TIMEOUT,
+                });
+
+                this.masterContext = await this.browser.newContext({
+                    viewport: {
+                        width: BrowserService.VIEWPORT_WIDTH,
+                        height: BrowserService.VIEWPORT_HEIGHT,
+                    },
+                });
+
+                const page = await this.masterContext.newPage();
+
+                // Track page lifecycle — null out activePage if it closes
+                // (user closes tab, navigation crash, etc.)
+                page.on("close", () => {
+                    if (this.activePage === page) {
+                        this.activePage = null;
+                    }
+                });
+
+                return page;
+            } catch (error) {
+                lastLaunchError = error;
+                // This channel isn't available (e.g. Chrome/Edge not installed) — try the next one.
+                await this.safeCleanup();
+            }
+        }
+
+        throw lastLaunchError instanceof Error
+            ? lastLaunchError
+            : new Error(String(lastLaunchError ?? "Unknown launch error"));
+    }
 
     // ── Page health checks ─────────────────────────────────────────────────
 
@@ -218,15 +263,9 @@ export class BrowserService {
      * Order: pages → context → browser process.
      */
     private async safeCleanup(): Promise<void> {
-        // Close active page
-        if (this.activePage) {
-            try {
-                if (!this.activePage.isClosed()) {
-                    await this.activePage.close();
-                }
-            } catch { /* ignore */ }
-            this.activePage = null;
-        }
+        // Just drop the reference — masterContext.close() below will
+        // close all pages in the context, avoiding double-close warnings.
+        this.activePage = null;
 
         // Close context (also closes any other pages in this context)
         if (this.masterContext) {
@@ -244,6 +283,14 @@ export class BrowserService {
                 }
             } catch { /* ignore */ }
             this.browser = null;
+        }
+
+        // Close server process
+        if (this.browserServer) {
+            try {
+                await this.browserServer.close();
+            } catch { /* ignore */ }
+            this.browserServer = null;
         }
     }
 
@@ -283,6 +330,7 @@ export class BrowserService {
             try {
                 if (p.url().includes(urlFragment)) {
                     this.activePage = p;
+                    await p.bringToFront();
                     return p;
                 }
             } catch { /* page may be closing */ }

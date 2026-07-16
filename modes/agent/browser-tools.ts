@@ -114,7 +114,8 @@ export function createNativeBrowserTools() {
     }
 
     /**
-     * Validate a Playwright keyboard key name.
+     * Validate a Playwright keyboard key or key combination.
+     * Supports single keys ("Enter") and combos ("Control+a", "Shift+Enter").
      */
     function validateKey(key: string): string {
         const validKeys = new Set([
@@ -127,12 +128,18 @@ export function createNativeBrowserTools() {
             "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
             "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
         ]);
-        if (!validKeys.has(key)) {
-            throw new Error(
-                `Invalid key "${key}". Must be a valid Playwright key name (e.g. Enter, Tab, Escape, ArrowDown).`,
-            );
+
+        // Support key combinations like "Control+a", "Shift+Enter"
+        const parts = key.split("+");
+        for (const part of parts) {
+            if (!validKeys.has(part)) {
+                throw new Error(
+                    `Invalid key "${part}" in "${key}". Must be a valid Playwright key name ` +
+                    `(e.g. Enter, Tab, Escape, ArrowDown) or combo (e.g. Control+a, Shift+Enter).`,
+                );
+            }
         }
-        return key;
+        return key; // Return the original combined string for Playwright
     }
 
     /**
@@ -140,9 +147,7 @@ export function createNativeBrowserTools() {
      * to dispatchEvent if the element is obscured.
      */
     async function robustClick(page: Page, selector: string, timeout = 10_000): Promise<void> {
-        const baseLocator = page.locator(selector);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const locator = (baseLocator as any).first;
+        const locator = page.locator(selector).first();
 
         // Wait for element to be visible and stable
         await locator.waitFor({ state: "visible", timeout });
@@ -171,36 +176,36 @@ export function createNativeBrowserTools() {
     }
 
     /**
-     * Robust type helper — clears the field and types character by character
-     * to trigger React/Vue event handlers properly.
+     * Robust type helper — clears the field and types text.
+     * Uses Playwright's fill() which handles clearing internally,
+     * then dispatches native events as a React/Vue fallback.
      */
     async function robustType(page: Page, selector: string, text: string, timeout = 10_000): Promise<void> {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const locator = (page.locator(selector) as any).first as any;
+        const locator = page.locator(selector).first();
 
-        // Wait for element
+        // Wait for element to be visible and interactable
         await locator.waitFor({ state: "visible", timeout });
 
-        // Focus the element
-        await locator.focus();
-
-        // Clear existing content (triple-click to select all, then type)
-        await locator.dblclick();
-        await page.keyboard.press("Backspace");
-
-        // Type with a small delay between keystrokes to trigger React state updates
+        // fill() internally clears the field, focuses it, and sets the value.
+        // No need for manual dblclick+Backspace which only selects one word.
         await locator.fill(text);
 
-        // Also dispatch input and change events for frameworks that rely on them
+        // Dispatch native events as a fallback for frameworks (React, Vue)
+        // that rely on the native value setter to trigger synthetic events.
         await locator.evaluate((el: Element, value: string) => {
-            // Set the value via the native setter to trigger React's synthetic events
-            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                window.HTMLInputElement.prototype,
-                "value",
+            // Try HTMLInputElement setter first, then HTMLTextAreaElement
+            const inputSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, "value",
             )?.set;
-            if (nativeInputValueSetter) {
-                nativeInputValueSetter.call(el, value);
+            const textareaSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype, "value",
+            )?.set;
+
+            const setter = el instanceof HTMLTextAreaElement ? textareaSetter : inputSetter;
+            if (setter) {
+                setter.call(el, value);
             }
+
             el.dispatchEvent(new Event("input", { bubbles: true }));
             el.dispatchEvent(new Event("change", { bubbles: true }));
         }, text);
@@ -356,10 +361,11 @@ export function createNativeBrowserTools() {
                         const seen = new Set<string>();
 
                         const elements = document.querySelectorAll(
-                            "h1,h2,h3,h4,a,button,input,select,textarea,[role='button'],[role='link'],[role='textbox'],[role='searchbox']",
+                            "h1,h2,h3,h4,a,button,input,select,textarea,form,img," +
+                            "[role='button'],[role='link'],[role='textbox'],[role='searchbox'],[role='form']",
                         );
 
-                        for (const el of elements) {
+                        for (const el of Array.from(elements)) {
                             if (!isVisible(el)) continue;
                             const tag = el.tagName.toLowerCase();
                             const text = ((el as HTMLElement).innerText ?? "").trim().slice(0, 80);
@@ -381,6 +387,14 @@ export function createNativeBrowserTools() {
                                 line = `[Select] | \`${sel}\``;
                             } else if (tag === "textarea") {
                                 line = `[Textarea] placeholder="${(el as HTMLTextAreaElement).placeholder}" | \`${sel}\``;
+                            } else if (tag === "form") {
+                                const action = (el as HTMLFormElement).action || "";
+                                const method = (el as HTMLFormElement).method || "GET";
+                                line = `[Form] method=${method.toUpperCase()} action="${action}" | \`${sel}\``;
+                            } else if (tag === "img") {
+                                const src = (el as HTMLImageElement).src || "";
+                                const alt = (el as HTMLImageElement).alt || "";
+                                line = `[Image] alt="${alt}" src="${src.slice(0, 80)}" | \`${sel}\``;
                             }
 
                             if (line && !seen.has(line)) {
@@ -491,9 +505,12 @@ export function createNativeBrowserTools() {
         }),
 
         browser_press_key: tool({
-            description: "Press a keyboard key (e.g. Enter, Tab, Escape, ArrowDown).",
+            description:
+                "Press a keyboard key or key combination. " +
+                "Single keys: Enter, Tab, Escape, ArrowDown. " +
+                "Combos: Control+a, Shift+Enter, Alt+F4.",
             inputSchema: z.object({
-                key: z.string().describe("Playwright key name"),
+                key: z.string().describe("Key name or combo (e.g. 'Enter', 'Control+a', 'Shift+Enter')"),
             }),
             execute: async ({ key }) => {
                 try {
@@ -525,8 +542,7 @@ export function createNativeBrowserTools() {
                     const parsedSelector = parseSelector(selector);
                     const page = await browserService.getPage();
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const locator = (page.locator(parsedSelector) as any).first;
+                    const locator = page.locator(parsedSelector).first();
                     await locator.waitFor({ state: "visible", timeout: 10_000 });
                     await locator.hover();
 
@@ -553,8 +569,7 @@ export function createNativeBrowserTools() {
                     const parsedSelector = parseSelector(selector);
                     const page = await browserService.getPage();
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const locator = (page.locator(parsedSelector) as any).first;
+                    const locator = page.locator(parsedSelector).first();
                     await locator.waitFor({ state: "visible", timeout: 10_000 });
 
                     // Try selecting by value first, then by label
@@ -589,8 +604,7 @@ export function createNativeBrowserTools() {
                     const parsedSelector = parseSelector(selector);
                     const page = await browserService.getPage();
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const locator = (page.locator(parsedSelector) as any).first;
+                    const locator = page.locator(parsedSelector).first();
                     await locator.waitFor({ state: "visible", timeout: 10_000 });
 
                     const isChecked = await locator.isChecked();
@@ -697,9 +711,6 @@ export function createNativeBrowserTools() {
                     const clamped = Math.max(-50_000, Math.min(50_000, pixels));
 
                     await page.evaluate((px) => {
-                        // Try scrolling the main scrollable container, fallback to window
-                        const scrollable = document.documentElement;
-                        scrollable.scrollTop += px;
                         window.scrollBy({ top: px, behavior: "smooth" });
                     }, clamped);
 
@@ -726,8 +737,7 @@ export function createNativeBrowserTools() {
                     const parsedSelector = parseSelector(selector);
                     const page = await browserService.getPage();
 
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const locator = (page.locator(parsedSelector) as any).first;
+                    const locator = page.locator(parsedSelector).first();
                     await locator.scrollIntoViewIfNeeded();
                     await page.waitForTimeout(300).catch(() => {});
 
@@ -747,12 +757,14 @@ export function createNativeBrowserTools() {
         browser_take_screenshot: tool({
             description: "Take a screenshot of the current viewport or full page.",
             inputSchema: z.object({
-                filePath: z.string().default("screenshot.png").describe("Output file path"),
+                filePath: z.string().optional().describe("Output file path (auto-generated if omitted)"),
                 fullPage: z.boolean().default(false).describe("Capture the entire scrollable page, not just the viewport"),
             }),
             execute: async ({ filePath, fullPage }) => {
                 try {
-                    const resolvedPath = resolveFilePath(filePath);
+                    // Generate a timestamped filename if none provided
+                    const effectivePath = filePath || `screenshot-${Date.now()}.png`;
+                    const resolvedPath = resolveFilePath(effectivePath);
                     ensureParentDir(resolvedPath);
 
                     const page = await browserService.getPage();
@@ -776,17 +788,27 @@ export function createNativeBrowserTools() {
         // ═══════════════════════════════════════════════════════════════════
 
         browser_evaluate: tool({
-            description: "Execute JavaScript in the page context and return the result.",
+            description:
+                "Execute JavaScript in the page context and return the result. " +
+                "Supports expressions (e.g. 'document.title') and statements.",
             inputSchema: z.object({
-                expression: z.string().describe("JavaScript expression to evaluate"),
+                expression: z.string().describe("JavaScript expression or statement to evaluate"),
             }),
             execute: async ({ expression }) => {
                 try {
                     const page = await browserService.getPage();
-                    const result = await page.evaluate(
-                        (expr: string) => new Function(`return (${expr})`)() as unknown,
-                        expression,
-                    );
+
+                    // Use Playwright's evaluate which runs in an isolated context
+                    // and is NOT subject to the page's CSP (unlike new Function).
+                    const result = await page.evaluate((expr: string) => {
+                        // Try as expression first, fall back to statement
+                        try {
+                            return (0, eval)(expr);
+                        } catch {
+                            // If direct eval fails, try wrapping as a return statement
+                            return (0, eval)(`(${expr})`);
+                        }
+                    }, expression);
 
                     if (result === undefined) return "undefined";
                     if (result === null) return "null";
@@ -856,6 +878,8 @@ export function createNativeBrowserTools() {
             inputSchema: z.object({}),
             execute: async () => {
                 try {
+                    // Ensure browser is launched before listing
+                    await browserService.getPage();
                     const tabs = await browserService.listTabs();
                     if (tabs.length === 0) return "No tabs open.";
 
@@ -889,6 +913,123 @@ export function createNativeBrowserTools() {
                     const msg = error instanceof Error ? error.message : String(error);
                     logAndContinue("browser-set-viewport", error, { width, height });
                     return `❌ Set viewport failed: ${msg}`;
+                }
+            },
+        }),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // CLOSE
+        // ═══════════════════════════════════════════════════════════════════
+
+        browser_close: tool({
+            description: "Close the browser and release all resources. Use when done with browser tasks.",
+            inputSchema: z.object({}),
+            execute: async () => {
+                try {
+                    await browserService.shutdown();
+                    return "🔒 Browser closed and resources released.";
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    logAndContinue("browser-close", error);
+                    return `❌ Browser close failed: ${msg}`;
+                }
+            },
+        }),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // HTML INSPECTION
+        // ═══════════════════════════════════════════════════════════════════
+
+        browser_get_html: tool({
+            description:
+                "Get the raw HTML of the current page or a specific element. " +
+                "Useful for debugging layout, inspecting structure, and extracting data.",
+            inputSchema: z.object({
+                selector: z.string().optional().describe(
+                    "CSS selector for a specific element. Omit to get the full page HTML.",
+                ),
+                outer: z.boolean().default(true).describe(
+                    "If true, returns outerHTML (includes the element itself). " +
+                    "If false, returns innerHTML (contents only).",
+                ),
+            }),
+            execute: async ({ selector, outer }) => {
+                try {
+                    const page = await browserService.getPage();
+
+                    let html: string;
+                    if (selector) {
+                        const parsedSelector = parseSelector(selector);
+                        const locator = page.locator(parsedSelector).first();
+                        await locator.waitFor({ state: "attached", timeout: 10_000 });
+                        html = outer
+                            ? await locator.evaluate((el: Element) => el.outerHTML)
+                            : await locator.evaluate((el: Element) => el.innerHTML);
+                    } else {
+                        html = await page.content();
+                    }
+
+                    // Truncate to prevent overwhelming the context window
+                    const truncated = html.length > 15_000;
+                    const result = html.slice(0, 15_000);
+                    return truncated
+                        ? `${result}\n\n... [truncated, ${html.length} chars total]`
+                        : result;
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    logAndContinue("browser-get-html", error, { selector });
+                    return `❌ Get HTML failed: ${msg}`;
+                }
+            },
+        }),
+
+        // ═══════════════════════════════════════════════════════════════════
+        // FORM FILLING
+        // ═══════════════════════════════════════════════════════════════════
+
+        browser_fill_form: tool({
+            description:
+                "Fill multiple form fields at once. Each field is specified as a " +
+                "selector-value pair. More efficient than calling browser_type multiple times.",
+            inputSchema: z.object({
+                fields: z.array(
+                    z.object({
+                        selector: z.string().describe("CSS selector for the form field"),
+                        value: z.string().describe("Value to fill in"),
+                    }),
+                ).describe("Array of {selector, value} pairs to fill"),
+                submit: z.boolean().default(false).describe(
+                    "If true, press Enter after filling the last field to submit the form",
+                ),
+            }),
+            execute: async ({ fields, submit }) => {
+                try {
+                    const page = await browserService.getPage();
+                    const results: string[] = [];
+
+                    for (const { selector, value } of fields) {
+                        try {
+                            const parsedSelector = parseSelector(selector);
+                            await robustType(page, parsedSelector, value);
+                            results.push(`  ✅ "${selector}" ← "${value}"`);
+                        } catch (fieldError) {
+                            const fieldMsg = fieldError instanceof Error ? fieldError.message : String(fieldError);
+                            results.push(`  ❌ "${selector}": ${fieldMsg}`);
+                        }
+                    }
+
+                    if (submit) {
+                        await page.keyboard.press("Enter");
+                        await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
+                        await page.waitForTimeout(500).catch(() => {});
+                        results.push("  ⏎ Form submitted (Enter pressed)");
+                    }
+
+                    return `📝 Form fill results:\n${results.join("\n")}`;
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    logAndContinue("browser-fill-form", error);
+                    return `❌ Form fill failed: ${msg}`;
                 }
             },
         }),

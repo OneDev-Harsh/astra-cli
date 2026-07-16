@@ -66,6 +66,19 @@ function getToolDetailsString(toolName: string, input: any): string {
         case "session_search":
         case "web_search": return input.query ? `searching for ${chalk.italic(`"${input.query}"`)}` : "";
         case "fetch_url": return input.url ? `fetching ${chalk.underline.dim(input.url)}` : "";
+        case "browser_navigate": return input.url ? `navigating to ${chalk.underline.dim(input.url)}` : "";
+        case "browser_click": return input.selector ? `clicking ${chalk.cyan(`"${input.selector}"`)}` : "";
+        case "browser_type": return input.selector ? `typing into ${chalk.cyan(`"${input.selector}"`)}` : "";
+        case "browser_press_key": return input.key ? `pressing ${chalk.magenta(input.key)}` : "";
+        case "browser_snapshot": return "taking page snapshot";
+        case "browser_get_text": return "extracting page text";
+        case "browser_get_html": return input.selector ? `getting HTML of ${chalk.cyan(`"${input.selector}"`)}` : "getting full page HTML";
+        case "browser_take_screenshot": return input.filePath ? `saving to ${chalk.yellow(input.filePath)}` : "capturing viewport";
+        case "browser_evaluate": return input.expression ? `evaluating JS` : "";
+        case "browser_scroll": return input.pixels ? `scrolling ${input.pixels > 0 ? "down" : "up"} ${Math.abs(input.pixels)}px` : "";
+        case "browser_fill_form": return input.fields ? `filling ${input.fields.length} field(s)` : "";
+        case "browser_wait_for_element": return input.selector ? `waiting for ${chalk.cyan(`"${input.selector}"`)}` : "";
+        case "browser_close": return "closing browser";
         default:
             if (targetPath) return `target: ${targetPath}`;
             if (input.query) return `query: "${input.query}"`;
